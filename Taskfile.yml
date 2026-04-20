@@ -48,7 +48,7 @@ tasks:
 
   copy-bundle:
     cmds:
-      - IMAGE_REPOSITORY="${IMAGE_REPOSITORY:-backend-api}" IMAGE_TAG="${IMAGE_TAG:-}" DEPLOY_TARGET="${DEPLOY_TARGET:-}" DEPLOY_PATH="${DEPLOY_PATH:-/home/ubuntu/backend-api-deploy}" SSH_OPTS="${SSH_OPTS:-}" bash ./deploy/scripts/copy-deploy-bundle.sh
+      - IMAGE_REPOSITORY="${IMAGE_REPOSITORY:-backend-api}" IMAGE_TAG="${IMAGE_TAG:-}" DEPLOY_TARGET="${DEPLOY_TARGET:-ubuntu@openclaw}" DEPLOY_PATH="${DEPLOY_PATH:-/home/ubuntu/backend-api-deploy}" SSH_OPTS="${SSH_OPTS:-}" bash ./deploy/scripts/copy-deploy-bundle.sh
 
   deploy:
     cmds:
@@ -56,7 +56,7 @@ tasks:
 
   ship-deploy:
     cmds:
-      - RELEASE_NAME="${RELEASE_NAME:-backend-api}" NAMESPACE="${NAMESPACE:-demo}" VALUES_FILE="${VALUES_FILE:-deploy/helm/backend-api/values-demo.yaml}" IMAGE_REPOSITORY="${IMAGE_REPOSITORY:-backend-api}" DEPLOY_TARGET="${DEPLOY_TARGET:-}" DEPLOY_PATH="${DEPLOY_PATH:-/home/ubuntu/backend-api-deploy}" SSH_OPTS="${SSH_OPTS:-}" KEEP_REMOTE_RELEASES="${KEEP_REMOTE_RELEASES:-3}" bash ./deploy/scripts/ship-deploy.sh
+      - RELEASE_NAME="${RELEASE_NAME:-backend-api}" NAMESPACE="${NAMESPACE:-demo}" VALUES_FILE="${VALUES_FILE:-deploy/helm/backend-api/values-demo.yaml}" IMAGE_REPOSITORY="${IMAGE_REPOSITORY:-backend-api}" DEPLOY_TARGET="${DEPLOY_TARGET:-ubuntu@openclaw}" DEPLOY_PATH="${DEPLOY_PATH:-/home/ubuntu/backend-api-deploy}" SSH_OPTS="${SSH_OPTS:-}" KEEP_REMOTE_RELEASES="${KEEP_REMOTE_RELEASES:-3}" bash ./deploy/scripts/ship-deploy.sh
 
   rollback:
     cmds:

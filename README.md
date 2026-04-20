@@ -182,8 +182,6 @@ The demo values file is already wired to look for that existing secret.
 The main deployment flow mirrors the frontend:
 
 ```bash
-DEPLOY_TARGET=ubuntu@openclaw \
-DEPLOY_PATH=/home/ubuntu/backend-api-deploy \
 task ship-deploy
 ```
 
@@ -201,7 +199,6 @@ What it does:
 
 Useful variables:
 
-- `DEPLOY_TARGET`
 - `DEPLOY_PATH`
 - `SSH_OPTS`
 - `KEEP_REMOTE_RELEASES`
@@ -213,9 +210,13 @@ If you are deploying to a fresh cluster, apply the runtime secret first:
 
 ```bash
 DB_PASSWORD='your-app-rw-password' task apply-runtime-secret
-DEPLOY_TARGET=ubuntu@openclaw \
-DEPLOY_PATH=/home/ubuntu/backend-api-deploy \
 task ship-deploy
+```
+
+Default target VM:
+
+```text
+ubuntu@openclaw
 ```
 
 ## Helm chart
