@@ -22,9 +22,32 @@ sqlalchemy = "2.0.39"
 uvicorn = { version = "0.34.0", extras = ["standard"] }
 
 [tool.poetry.group.dev.dependencies]
+black = "25.1.0"
 httpx = "0.28.1"
+mypy = "1.18.2"
+pydocstyle = "6.3.0"
 pytest = "8.3.5"
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
+
+[tool.black]
+line-length = 88
+target-version = ["py313"]
+
+[tool.mypy]
+python_version = "3.14"
+strict = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+disallow_any_generics = false
+
+[[tool.mypy.overrides]]
+module = ["oracledb.*"]
+ignore_missing_imports = true
+
+[tool.pydocstyle]
+convention = "pep257"
+add-ignore = ["D104", "D105", "D107", "D203", "D213"]
+match-dir = "(?!alembic$).*"

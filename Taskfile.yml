@@ -1,9 +1,25 @@
 version: "3"
 
+vars:
+  SRC_DIR: '{{default "app" .SRC_DIR}}'
+
 tasks:
   install:
     cmds:
       - poetry install
+
+  reformat:
+    desc: >-
+      Reformat the codebase.
+    cmds:
+        - poetry run black {{.SRC_DIR}}
+
+  lint:
+    cmds:
+      - poetry run mypy {{.SRC_DIR}}
+      - PYTHONPYCACHEPREFIX=/tmp/backend-api-pyc poetry run python -m compileall {{.SRC_DIR}}
+      - poetry run black --workers 1 --check --diff {{.SRC_DIR}}
+      - poetry run pydocstyle {{.SRC_DIR}}
 
   dev:
     cmds:

@@ -1,7 +1,10 @@
+"""Logging configuration helpers for the backend service."""
+
 from logging.config import dictConfig
 
 
 def configure_logging(log_level: str) -> None:
+    """Configure the root logger for application processes."""
     dictConfig(
         {
             "version": 1,

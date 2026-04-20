@@ -1,3 +1,5 @@
+"""Top-level API router composition for backend endpoints."""
+
 from fastapi import APIRouter
 
 from app.api.routes import system, webhooks

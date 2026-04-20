@@ -1,3 +1,5 @@
+"""Runtime settings and connection helpers for the backend service."""
+
 from functools import lru_cache
 
 from pydantic import Field, model_validator
@@ -5,6 +7,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    """Application settings loaded from environment variables."""
+
     model_config = SettingsConfigDict(env_file=None, extra="ignore")
 
     app_name: str = Field(default="Backend API", alias="APP_NAME")
@@ -16,7 +20,9 @@ class Settings(BaseSettings):
     db_dsn: str | None = Field(default=None, alias="DB_DSN")
     db_user: str | None = Field(default=None, alias="DB_USER")
     db_password: str | None = Field(default=None, alias="DB_PASSWORD")
-    run_migrations_on_startup: bool = Field(default=False, alias="RUN_MIGRATIONS_ON_STARTUP")
+    run_migrations_on_startup: bool = Field(
+        default=False, alias="RUN_MIGRATIONS_ON_STARTUP"
+    )
 
     twilio_account_sid: str | None = Field(default=None, alias="TWILIO_ACCOUNT_SID")
     twilio_auth_token: str | None = Field(default=None, alias="TWILIO_AUTH_TOKEN")
@@ -26,6 +32,7 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_database_settings(self) -> "Settings":
+        """Ensure either a full database URL or Oracle connection triplet is set."""
         if self.database_url:
             return self
 
@@ -47,12 +54,14 @@ class Settings(BaseSettings):
 
     @property
     def sqlalchemy_url(self) -> str:
+        """Return the SQLAlchemy driver URL for the active database backend."""
         if self.database_url:
             return self.database_url
         return "oracle+oracledb://"
 
     @property
     def sqlalchemy_connect_args(self) -> dict[str, str]:
+        """Return SQLAlchemy connect args for Oracle split environment settings."""
         if self.database_url:
             return {}
         return {
@@ -64,4 +73,5 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
+    """Return cached application settings for the current process."""
     return Settings()

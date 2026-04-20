@@ -54,7 +54,7 @@ IMAGE_ARCHIVE_NAME="${IMAGE_ARCHIVE_NAME:-image-${IMAGE_TAG}.tar}"
 REMOTE_RELEASE_DIR="${DEPLOY_PATH}/releases/${IMAGE_TAG}"
 
 echo "Running local checks"
-PYTHONPYCACHEPREFIX=/tmp/backend-api-pyc python3 -m compileall "${REPO_ROOT}/app" "${REPO_ROOT}/alembic"
+(cd "${REPO_ROOT}" && task lint)
 helm lint "${REPO_ROOT}/deploy/helm/backend-api"
 
 bash "${SCRIPT_DIR}/build-image.sh" "${IMAGE_TAG}"
