@@ -14,7 +14,7 @@ RUN apt-get update \
 RUN pip install --upgrade pip \
   && pip install "poetry==${POETRY_VERSION}"
 
-COPY pyproject.toml poetry.lock* README.md ./
+COPY pyproject.toml poetry.lock* ./
 COPY app ./app
 COPY alembic.ini ./alembic.ini
 COPY alembic ./alembic
