@@ -1,0 +1,13 @@
+namespace: demo
+
+configEnv:
+  APP_NAME: "Backend API"
+  ENVIRONMENT: "demo"
+  LOG_LEVEL: "INFO"
+  HOST: "0.0.0.0"
+  PORT: "8000"
+  DB_DSN: "(description=(retry_count=20)(retry_delay=3)(address=(protocol=tcps)(port=1522)(host=adb.us-ashburn-1.oraclecloud.com))(connect_data=(service_name=gd70f35d5708eaf_prototypedb_tp.adb.oraclecloud.com))(security=(ssl_server_dn_match=yes)))"
+  DB_USER: "APP_RW"
+  RUN_MIGRATIONS_ON_STARTUP: "true"
+
+existingSecretName: "backend-api-secrets"

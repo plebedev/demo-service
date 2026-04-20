@@ -1,0 +1,67 @@
+version: "3"
+
+tasks:
+  install:
+    cmds:
+      - poetry install
+
+  dev:
+    cmds:
+      - bash -lc 'set -a; source local/.env.backend; set +a; poetry run uvicorn app.main:create_app --factory --reload --host 0.0.0.0 --port 8000'
+
+  build:
+    cmds:
+      - PYTHONPYCACHEPREFIX=/tmp/backend-api-pyc poetry run python -m compileall app alembic
+
+  local-up:
+    cmds:
+      - bash ./local/scripts/up.sh
+
+  local-down:
+    cmds:
+      - bash ./local/scripts/down.sh
+
+  local-logs:
+    cmds:
+      - bash ./local/scripts/logs.sh
+
+  migrate:
+    cmds:
+      - bash -lc 'set -a; source local/.env.backend; set +a; poetry run alembic upgrade head'
+
+  makemigration:
+    cmds:
+      - test -n "${MESSAGE:-}" || (echo "Set MESSAGE=..." && exit 1)
+      - bash -lc 'set -a; source local/.env.backend; set +a; poetry run alembic revision --autogenerate -m "${MESSAGE}"'
+
+  docker-build:
+    cmds:
+      - IMAGE_REPOSITORY="${IMAGE_REPOSITORY:-backend-api}" IMAGE_TAG="${IMAGE_TAG:-}" bash ./deploy/scripts/build-image.sh
+
+  save-image:
+    cmds:
+      - IMAGE_REPOSITORY="${IMAGE_REPOSITORY:-backend-api}" IMAGE_TAG="${IMAGE_TAG:-}" bash ./deploy/scripts/save-image.sh
+
+  apply-runtime-secret:
+    cmds:
+      - SECRET_NAME="${SECRET_NAME:-backend-api-secrets}" NAMESPACE="${NAMESPACE:-demo}" DB_PASSWORD="${DB_PASSWORD:-}" bash ./deploy/scripts/apply-runtime-secret.sh
+
+  copy-bundle:
+    cmds:
+      - IMAGE_REPOSITORY="${IMAGE_REPOSITORY:-backend-api}" IMAGE_TAG="${IMAGE_TAG:-}" DEPLOY_TARGET="${DEPLOY_TARGET:-}" DEPLOY_PATH="${DEPLOY_PATH:-/home/ubuntu/backend-api-deploy}" SSH_OPTS="${SSH_OPTS:-}" bash ./deploy/scripts/copy-deploy-bundle.sh
+
+  deploy:
+    cmds:
+      - RELEASE_NAME="${RELEASE_NAME:-backend-api}" NAMESPACE="${NAMESPACE:-demo}" VALUES_FILE="${VALUES_FILE:-deploy/helm/backend-api/values-demo.yaml}" IMAGE_REPOSITORY="${IMAGE_REPOSITORY:-backend-api}" IMAGE_TAG="${IMAGE_TAG:-}" bash ./deploy/scripts/deploy.sh
+
+  ship-deploy:
+    cmds:
+      - RELEASE_NAME="${RELEASE_NAME:-backend-api}" NAMESPACE="${NAMESPACE:-demo}" VALUES_FILE="${VALUES_FILE:-deploy/helm/backend-api/values-demo.yaml}" IMAGE_REPOSITORY="${IMAGE_REPOSITORY:-backend-api}" DEPLOY_TARGET="${DEPLOY_TARGET:-}" DEPLOY_PATH="${DEPLOY_PATH:-/home/ubuntu/backend-api-deploy}" SSH_OPTS="${SSH_OPTS:-}" KEEP_REMOTE_RELEASES="${KEEP_REMOTE_RELEASES:-3}" bash ./deploy/scripts/ship-deploy.sh
+
+  rollback:
+    cmds:
+      - RELEASE_NAME="${RELEASE_NAME:-backend-api}" NAMESPACE="${NAMESPACE:-demo}" REVISION="${REVISION:-}" bash ./deploy/scripts/rollback.sh
+
+  history:
+    cmds:
+      - helm history "${RELEASE_NAME:-backend-api}" --namespace "${NAMESPACE:-demo}"

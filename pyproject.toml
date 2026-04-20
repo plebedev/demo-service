@@ -1,0 +1,30 @@
+[build-system]
+requires = ["poetry-core>=1.9.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry]
+name = "backend-api"
+version = "0.1.0"
+description = "Production-like FastAPI backend starter for k3s"
+authors = ["Plebedev"]
+readme = "README.md"
+packages = [{ include = "app" }]
+
+[tool.poetry.dependencies]
+python = ">=3.14,<3.15"
+alembic = "1.14.1"
+fastapi = "0.115.12"
+oracledb = "3.4.2"
+psycopg = { version = "3.3.3", extras = ["binary"] }
+pydantic = "2.12.2"
+pydantic-settings = "2.13.1"
+sqlalchemy = "2.0.39"
+uvicorn = { version = "0.34.0", extras = ["standard"] }
+
+[tool.poetry.group.dev.dependencies]
+httpx = "0.28.1"
+pytest = "8.3.5"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

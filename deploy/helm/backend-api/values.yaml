@@ -1,0 +1,52 @@
+namespace: demo
+
+replicaCount: 1
+
+image:
+  repository: backend-api
+  tag: "dev"
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 8000
+
+ingress:
+  enabled: false
+  className: traefik
+  annotations: {}
+  path: /api
+  pathType: Prefix
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 192Mi
+  limits:
+    cpu: 400m
+    memory: 384Mi
+
+probes:
+  livenessPath: /health
+  readinessPath: /ready
+  initialDelaySeconds: 10
+  periodSeconds: 10
+  timeoutSeconds: 3
+  failureThreshold: 3
+
+configEnv:
+  APP_NAME: "Backend API"
+  ENVIRONMENT: "demo"
+  LOG_LEVEL: "INFO"
+  HOST: "0.0.0.0"
+  PORT: "8000"
+  DB_DSN: ""
+  DB_USER: ""
+  RUN_MIGRATIONS_ON_STARTUP: "true"
+
+secretEnv: {}
+existingSecretName: ""
+
+nameOverride: ""
+fullnameOverride: ""

@@ -1,0 +1,5 @@
+1. Check rollout status:
+   kubectl rollout status deployment/{{ include "backend-api.fullname" . }} -n {{ .Values.namespace }}
+
+2. Check the internal service:
+   kubectl get svc -n {{ .Values.namespace }}

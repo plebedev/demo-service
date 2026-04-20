@@ -1,0 +1,10 @@
+from app.core.config import Settings
+from app.schemas.status import ProviderStatus, ProviderStatuses
+
+
+def provider_statuses(settings: Settings) -> ProviderStatuses:
+    return ProviderStatuses(
+        twilio=ProviderStatus(configured=bool(settings.twilio_account_sid and settings.twilio_auth_token)),
+        plivo=ProviderStatus(configured=bool(settings.plivo_auth_id and settings.plivo_auth_token)),
+        llm=ProviderStatus(configured=bool(settings.llm_api_key)),
+    )
