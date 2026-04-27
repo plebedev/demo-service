@@ -4,7 +4,9 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import func, literal, select
 from sqlalchemy.orm import Session
 
+from app.api.deps import get_current_access_token
 from app.core.config import get_settings
+from app.core.phase1 import build_phase1_guardrails, workflow_guardrail_todo
 from app.db.models import ExampleRecord
 from app.db.session import get_db_session
 from app.integrations.status import provider_statuses
@@ -27,7 +29,10 @@ def ready(db: Session = Depends(get_db_session)) -> ReadyResponse:
 
 
 @router.get("/api/status", response_model=ApiStatusResponse)
-def api_status(db: Session = Depends(get_db_session)) -> ApiStatusResponse:
+def api_status(
+    db: Session = Depends(get_db_session),
+    _: object = Depends(get_current_access_token),
+) -> ApiStatusResponse:
     """Return detailed backend status for the frontend BFF."""
     settings = get_settings()
     db.execute(select(literal(1)))
@@ -41,4 +46,6 @@ def api_status(db: Session = Depends(get_db_session)) -> ApiStatusResponse:
         database_ready=True,
         example_record_count=example_record_count,
         providers=provider_statuses(settings),
+        phase1=build_phase1_guardrails(settings),
+        workflow_todo=workflow_guardrail_todo(),
     )

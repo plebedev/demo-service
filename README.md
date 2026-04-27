@@ -1,17 +1,22 @@
-# Backend API Starter
+# Invite-Only Demo Backend API
 
-This repository is a production-like FastAPI backend starter for a single-node `k3s` cluster on an Oracle Cloud VM. It mirrors the frontend repo's no-registry deploy approach: build locally, ship the image and committed source to the VM, import into `k3s`, and deploy with Helm.
+This repository is the phase-1 backend API for the invite-only demo. It mirrors the frontend repo's no-registry deploy approach: build locally, ship the image and committed source to the VM, import into `k3s`, and deploy with Helm.
 
 ## What is included
 
 - FastAPI app with:
   - `/health`
   - `/ready`
-  - `/api/status`
+  - `/api/status` protected by a signed phase-1 access token
+  - `/api/access/redeem` for invitation-code validation and token issuance
+  - `/api/access/verify` for stored-token validation
+  - `/api/internal/admin/invitations/*` for internal invite management
   - placeholder webhook endpoints for Twilio and Plivo
 - SQLAlchemy 2.x models and sessions
 - Pydantic 2 settings and response models
 - Alembic config and an initial migration
+- invitation code and redemption tracking tables
+- pytest coverage for invite validation, token validation, and protected route access control
 - Production Dockerfile
 - `local/` Docker Compose for Postgres-backed local development
 - `deploy/` Helm chart and VM ship-deploy scripts
@@ -64,9 +69,13 @@ Important variables:
 | `DB_USER` | Oracle database user, such as `APP_RW` |
 | `DB_PASSWORD` | Oracle database password, injected from a Kubernetes Secret |
 | `RUN_MIGRATIONS_ON_STARTUP` | If `true`, the container upgrades to the latest Alembic revision before app start |
-| `TWILIO_ACCOUNT_SID` / `TWILIO_AUTH_TOKEN` | Future provider credentials |
-| `PLIVO_AUTH_ID` / `PLIVO_AUTH_TOKEN` | Future provider credentials |
-| `LLM_API_KEY` | Future LLM provider credential |
+| `ACCESS_TOKEN_SIGNING_KEY` | HMAC signing key for invite-issued access tokens |
+| `ACCESS_TOKEN_TTL_SECONDS` | Lifetime for the signed phase-1 access token |
+| `ADMIN_API_SECRET` | Shared secret for internal invitation-management endpoints |
+| `MAX_FILES_PER_RUN` | Phase-1 placeholder limit for files per run |
+| `MAX_FILE_SIZE_BYTES` | Phase-1 placeholder limit for file upload size |
+| `MAX_EXTRACTED_TEXT_BYTES` | Phase-1 placeholder limit for extracted text per file |
+| `MAX_TOTAL_WORKFLOW_TEXT_BYTES` | Phase-1 placeholder limit for total workflow input text |
 
 The app accepts either:
 
@@ -74,6 +83,32 @@ The app accepts either:
 - or the Oracle split configuration `DB_DSN` + `DB_USER` + `DB_PASSWORD`
 
 For Oracle Cloud deployments, prefer OCI Vault / Secret Management as the real secret source, then sync those values into Kubernetes Secrets or environment variables at deploy time.
+
+## Demo guardrails
+
+This is a demo, not a general-purpose assistant.
+
+Supported phase-1 inputs:
+
+- pasted text
+- text file upload
+- PDF upload with extractable text
+
+Not supported in phase 1:
+
+- images
+- OCR
+- audio/video
+- web lookup
+
+Follow-up constraints:
+
+- one generated brief per run
+- at most one follow-up question after brief generation
+- the follow-up must be about the generated brief
+- after that, the user must start a new run
+
+The backend now publishes these guardrails through the protected status and access-verification responses. The full brief workflow is still intentionally out of scope, and the codebase marks the workflow-enforcement boundary with explicit TODO text rather than faking unfinished behavior.
 
 ## Local development
 
@@ -122,7 +157,21 @@ Try:
 ```bash
 curl http://127.0.0.1:8000/health
 curl http://127.0.0.1:8000/ready
-curl http://127.0.0.1:8000/api/status
+```
+
+Use the internal admin API to mint an invitation code:
+
+```bash
+ADMIN_API_SECRET=demo-admin-change-me \
+bash deploy/scripts/invitation-admin.sh create demo-local-code local-demo 5
+```
+
+Redeem and verify a code locally:
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/access/redeem \
+  -H 'Content-Type: application/json' \
+  -d '{"code":"demo-local-code"}'
 ```
 
 ## Alembic
@@ -142,6 +191,16 @@ MESSAGE=add-new-table task makemigration
 The initial scaffold includes one migration that creates the `example_records` table.
 
 The local `task dev`, `task migrate`, and `task makemigration` commands automatically source `local/.env.backend` before running.
+
+## Tests
+
+Run the normal backend checks with:
+
+```bash
+task test
+task lint
+task build
+```
 
 ## Docker image
 
@@ -170,7 +229,10 @@ For the current Oracle Cloud demo shape:
 Create or update the runtime secret:
 
 ```bash
-DB_PASSWORD='your-app-rw-password' task apply-runtime-secret
+DB_PASSWORD='your-app-rw-password' \
+ACCESS_TOKEN_SIGNING_KEY='replace-with-random-secret' \
+ADMIN_API_SECRET='replace-with-internal-admin-secret' \
+task apply-runtime-secret
 ```
 
 The default secret name is `backend-api-secrets` in namespace `demo`.
@@ -246,6 +308,8 @@ The chart is intentionally internal-first. Later, if you want selected webhook r
 - enable/create an Ingress for this service with narrow webhook paths, or
 - split webhook exposure into a separate ingress or gateway rule while leaving most backend API routes internal behind the frontend/BFF
 
+The internal invitation admin API is intended to stay on the cluster-internal service and should not be exposed through ingress.
+
 ## Rollback
 
 Show history:
@@ -270,3 +334,16 @@ REVISION=1 task rollback
 - The recommended service for the backend API is the `..._tp` service, not `..._high`.
 - The backend currently expects the read/write user in production, such as `APP_RW`.
 - The starter schema uses generic SQLAlchemy types to avoid obvious cross-dialect issues, but you should still test future migrations against Oracle before relying on local Postgres behavior alone.
+
+## Internal admin helper
+
+The VM-side invite management helper is [deploy/scripts/invitation-admin.sh](/Users/plebedev/github/demo/demo-service/deploy/scripts/invitation-admin.sh).
+
+Supported commands:
+
+- `create [code] [label] [max_uses]`
+- `list`
+- `deactivate <invitation_code_id>`
+- `stats`
+
+It calls the backend internal admin API and never talks directly to the database.

@@ -21,6 +21,14 @@ tasks:
       - poetry run black --workers 1 --check --diff {{.SRC_DIR}}
       - poetry run pydocstyle {{.SRC_DIR}}
 
+  verify:
+    cmds:
+      - bash -lc 'poetry run mypy {{.SRC_DIR}} && PYTHONPYCACHEPREFIX=/tmp/backend-api-pyc poetry run python -m compileall {{.SRC_DIR}} && poetry run black --workers 1 --check --diff {{.SRC_DIR}} && poetry run pydocstyle {{.SRC_DIR}} && poetry run python -m pytest && PYTHONPYCACHEPREFIX=/tmp/backend-api-pyc poetry run python -m compileall app alembic'
+
+  test:
+    cmds:
+      - poetry run python -m pytest
+
   dev:
     cmds:
       - bash -lc 'set -a; source local/.env.backend; set +a; poetry run uvicorn app.main:create_app --factory --reload --host 0.0.0.0 --port 8000'

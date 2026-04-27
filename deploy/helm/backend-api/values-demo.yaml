@@ -9,5 +9,10 @@ configEnv:
   DB_DSN: "(description=(retry_count=20)(retry_delay=3)(address=(protocol=tcps)(port=1522)(host=adb.us-ashburn-1.oraclecloud.com))(connect_data=(service_name=gd70f35d5708eaf_prototypedb_tp.adb.oraclecloud.com))(security=(ssl_server_dn_match=yes)))"
   DB_USER: "APP_RW"
   RUN_MIGRATIONS_ON_STARTUP: "true"
+  ACCESS_TOKEN_TTL_SECONDS: "604800"
+  MAX_FILES_PER_RUN: "3"
+  MAX_FILE_SIZE_BYTES: "5242880"
+  MAX_EXTRACTED_TEXT_BYTES: "250000"
+  MAX_TOTAL_WORKFLOW_TEXT_BYTES: "400000"
 
 existingSecretName: "backend-api-secrets"
