@@ -105,6 +105,7 @@ def reset_database(session_factory: sessionmaker[Session]) -> Generator[None, No
             text(
                 """
                 TRUNCATE TABLE
+                    runs,
                     invitation_redemptions,
                     invitation_codes,
                     example_records

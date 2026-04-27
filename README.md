@@ -10,13 +10,16 @@ This repository is the phase-1 backend API for the invite-only demo. It mirrors 
   - `/api/status` protected by a signed phase-1 access token
   - `/api/access/redeem` for invitation-code validation and token issuance
   - `/api/access/verify` for stored-token validation
+  - `/api/runs/*` protected endpoints for draft creation, listing, editing, and submission
   - `/api/internal/admin/invitations/*` for internal invite management
   - placeholder webhook endpoints for Twilio and Plivo
 - SQLAlchemy 2.x models and sessions
 - Pydantic 2 settings and response models
 - Alembic config and an initial migration
 - invitation code and redemption tracking tables
+- persisted `runs` table for the M2 demo shell
 - pytest coverage for invite validation, token validation, and protected route access control
+  plus demo-run creation, retrieval, editing, and submit transition coverage
 - Production Dockerfile
 - `local/` Docker Compose for Postgres-backed local development
 - `deploy/` Helm chart and VM ship-deploy scripts
@@ -200,6 +203,7 @@ Run the normal backend checks with:
 task test
 task lint
 task build
+task verify
 ```
 
 ## Docker image
