@@ -23,6 +23,23 @@ class Settings(BaseSettings):
     run_migrations_on_startup: bool = Field(
         default=False, alias="RUN_MIGRATIONS_ON_STARTUP"
     )
+    access_token_signing_key: str = Field(
+        default="demo-phase1-change-me", alias="ACCESS_TOKEN_SIGNING_KEY"
+    )
+    access_token_ttl_seconds: int = Field(
+        default=604800, alias="ACCESS_TOKEN_TTL_SECONDS"
+    )
+    admin_api_secret: str = Field(
+        default="demo-admin-change-me", alias="ADMIN_API_SECRET"
+    )
+    max_files_per_run: int = Field(default=3, alias="MAX_FILES_PER_RUN")
+    max_file_size_bytes: int = Field(default=5_242_880, alias="MAX_FILE_SIZE_BYTES")
+    max_extracted_text_bytes: int = Field(
+        default=250_000, alias="MAX_EXTRACTED_TEXT_BYTES"
+    )
+    max_total_workflow_text_bytes: int = Field(
+        default=400_000, alias="MAX_TOTAL_WORKFLOW_TEXT_BYTES"
+    )
 
     twilio_account_sid: str | None = Field(default=None, alias="TWILIO_ACCOUNT_SID")
     twilio_auth_token: str | None = Field(default=None, alias="TWILIO_AUTH_TOKEN")

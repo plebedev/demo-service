@@ -2,6 +2,8 @@
 
 from pydantic import BaseModel
 
+from app.core.phase1 import Phase1Guardrails
+
 
 class ProviderStatus(BaseModel):
     """Configuration status for a single provider integration."""
@@ -38,3 +40,5 @@ class ApiStatusResponse(BaseModel):
     database_ready: bool
     example_record_count: int
     providers: ProviderStatuses
+    phase1: Phase1Guardrails
+    workflow_todo: str
