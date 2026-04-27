@@ -31,7 +31,7 @@ tasks:
 
   dev:
     cmds:
-      - bash -lc 'set -a; source local/.env.backend; set +a; poetry run uvicorn app.main:create_app --factory --reload --host 0.0.0.0 --port 8000'
+      - poetry run uvicorn app.main:create_app --factory --reload --host 0.0.0.0 --port 8000
 
   build:
     cmds:
@@ -51,12 +51,12 @@ tasks:
 
   migrate:
     cmds:
-      - bash -lc 'set -a; source local/.env.backend; set +a; poetry run python -m alembic upgrade head'
+      - poetry run python -m alembic upgrade head
 
   makemigration:
     cmds:
       - test -n "${MESSAGE:-}" || (echo "Set MESSAGE=..." && exit 1)
-      - bash -lc 'set -a; source local/.env.backend; set +a; poetry run python -m alembic revision --autogenerate -m "${MESSAGE}"'
+      - poetry run python -m alembic revision --autogenerate -m "${MESSAGE}"
 
   docker-build:
     cmds:

@@ -56,9 +56,18 @@ This repository is the phase-1 backend API for the invite-only demo. It mirrors 
 
 ## Configuration
 
-The application has a single configuration-loading path: environment variables only.
+The backend now supports two configuration modes:
 
-- Local development: copy local env examples and export them into your shell
+- Local development: auto-load `local/.env.backend`
+- Deployed environments: use real environment variables only
+
+When `ENVIRONMENT=local` or `ENVIRONMENT` is unset, the app loads
+`local/.env.backend` automatically. When `ENVIRONMENT` is anything else such as
+`demo` or `production`, the dotenv file is ignored and only process
+environment variables are used.
+
+You can override the local dotenv path for one-off runs with `LOCAL_ENV_FILE`.
+
 - Kubernetes: inject config via ConfigMap and secrets via Helm/Kubernetes Secret
 
 Important variables:
@@ -135,21 +144,13 @@ cp local/.env.backend.example local/.env.backend
 task local-up
 ```
 
-4. Export local app settings:
-
-```bash
-set -a
-source local/.env.backend
-set +a
-```
-
-5. Apply migrations:
+4. Apply migrations:
 
 ```bash
 task migrate
 ```
 
-6. Run the API:
+5. Run the API:
 
 ```bash
 task dev
@@ -193,7 +194,17 @@ MESSAGE=add-new-table task makemigration
 
 The initial scaffold includes one migration that creates the `example_records` table.
 
-The local `task dev`, `task migrate`, and `task makemigration` commands automatically source `local/.env.backend` before running.
+Local config files have separate roles:
+
+- `local/.env.backend`
+  Backend application settings for local development. The app now reads this
+  file automatically in local mode.
+- `local/.env.postgres`
+  Docker Compose settings for the local Postgres container only.
+
+The local `task dev`, `task migrate`, and `task makemigration` commands no
+longer need an explicit `source local/.env.backend` step because the backend
+loads that file itself in local mode.
 
 ## Tests
 

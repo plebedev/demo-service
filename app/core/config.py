@@ -1,15 +1,30 @@
 """Runtime settings and connection helpers for the backend service."""
 
 from functools import lru_cache
+import os
 
 from pydantic import Field, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import (
+    BaseSettings,
+    DotEnvSettingsSource,
+    PydanticBaseSettingsSource,
+    SettingsConfigDict,
+)
+
+
+def _local_env_file() -> str:
+    """Return the local-only dotenv path for backend development."""
+    return os.getenv("LOCAL_ENV_FILE", "local/.env.backend")
 
 
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
 
-    model_config = SettingsConfigDict(env_file=None, extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=None,
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
 
     app_name: str = Field(default="Backend API", alias="APP_NAME")
     environment: str = Field(default="local", alias="ENVIRONMENT")
@@ -46,6 +61,29 @@ class Settings(BaseSettings):
     plivo_auth_id: str | None = Field(default=None, alias="PLIVO_AUTH_ID")
     plivo_auth_token: str | None = Field(default=None, alias="PLIVO_AUTH_TOKEN")
     llm_api_key: str | None = Field(default=None, alias="LLM_API_KEY")
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        """Load local dotenv values only for local development."""
+        if os.getenv("ENVIRONMENT", "local") == "local":
+            return (
+                init_settings,
+                env_settings,
+                DotEnvSettingsSource(
+                    settings_cls,
+                    env_file=_local_env_file(),
+                    env_file_encoding="utf-8",
+                ),
+                file_secret_settings,
+            )
+        return init_settings, env_settings, file_secret_settings
 
     @model_validator(mode="after")
     def validate_database_settings(self) -> "Settings":
