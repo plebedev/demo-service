@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, status
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, File, Form, UploadFile, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_access_token
@@ -17,7 +19,10 @@ from app.schemas.runs import (
 from app.services.runs import (
     create_run,
     get_run_or_404,
+    ingest_run_draft,
     list_runs,
+    serialize_run,
+    serialize_run_list,
     submit_run,
     update_run_draft,
 )
@@ -32,9 +37,7 @@ router = APIRouter(
 @router.get("", response_model=RunListResponse)
 def list_runs_route(db: Session = Depends(get_db_session)) -> RunListResponse:
     """Return newest-first run history for the protected demo shell."""
-    return RunListResponse(
-        runs=[RunResponse.model_validate(run) for run in list_runs(db)]
-    )
+    return serialize_run_list(list_runs(db))
 
 
 @router.post("", response_model=RunResponse, status_code=status.HTTP_201_CREATED)
@@ -43,13 +46,13 @@ def create_run_route(
     db: Session = Depends(get_db_session),
 ) -> RunResponse:
     """Create a new draft run."""
-    return RunResponse.model_validate(create_run(db, payload))
+    return serialize_run(create_run(db, payload))
 
 
 @router.get("/{run_id}", response_model=RunResponse)
 def get_run_route(run_id: int, db: Session = Depends(get_db_session)) -> RunResponse:
     """Return one persisted run."""
-    return RunResponse.model_validate(get_run_or_404(db, run_id))
+    return serialize_run(get_run_or_404(db, run_id))
 
 
 @router.put("/{run_id}", response_model=RunResponse)
@@ -60,15 +63,35 @@ def update_run_route(
 ) -> RunResponse:
     """Update the editable draft fields of a run."""
     run = get_run_or_404(db, run_id)
-    return RunResponse.model_validate(update_run_draft(db, run, payload))
+    return serialize_run(update_run_draft(db, run, payload))
+
+
+@router.post("/{run_id}/ingest", response_model=RunResponse)
+async def ingest_run_route(
+    run_id: int,
+    title: Annotated[str | None, Form()] = None,
+    input_text: Annotated[str | None, Form()] = None,
+    files: Annotated[list[UploadFile], File()] = [],
+    db: Session = Depends(get_db_session),
+) -> RunResponse:
+    """Normalize pasted text and uploads for a draft run."""
+    run = get_run_or_404(db, run_id)
+    updated = await ingest_run_draft(
+        db,
+        run,
+        title=title,
+        pasted_text=input_text,
+        files=files,
+    )
+    return serialize_run(updated)
 
 
 @router.post("/{run_id}/submit", response_model=RunResponse)
 def submit_run_route(
     run_id: int,
-    payload: RunSubmitRequest,
+    payload: RunSubmitRequest | None = None,
     db: Session = Depends(get_db_session),
 ) -> RunResponse:
     """Mark a run as submitted until async processing is added."""
     run = get_run_or_404(db, run_id)
-    return RunResponse.model_validate(submit_run(db, run, payload))
+    return serialize_run(submit_run(db, run, payload))
