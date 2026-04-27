@@ -18,8 +18,10 @@ This repository is the phase-1 backend API for the invite-only demo. It mirrors 
 - Alembic config and an initial migration
 - invitation code and redemption tracking tables
 - persisted `runs` table for the M2 demo shell
+- normalized ingestion storage for M3: raw pasted text, accepted file extracts,
+  and summary/warning metadata
 - pytest coverage for invite validation, token validation, and protected route access control
-  plus demo-run creation, retrieval, editing, and submit transition coverage
+  plus demo-run creation, retrieval, editing, submission, and deterministic ingestion coverage
 - Production Dockerfile
 - `local/` Docker Compose for Postgres-backed local development
 - `deploy/` Helm chart and VM ship-deploy scripts
@@ -86,8 +88,9 @@ Important variables:
 | `ADMIN_API_SECRET` | Shared secret for internal invitation-management endpoints |
 | `MAX_FILES_PER_RUN` | Phase-1 placeholder limit for files per run |
 | `MAX_FILE_SIZE_BYTES` | Phase-1 placeholder limit for file upload size |
-| `MAX_EXTRACTED_TEXT_BYTES` | Phase-1 placeholder limit for extracted text per file |
-| `MAX_TOTAL_WORKFLOW_TEXT_BYTES` | Phase-1 placeholder limit for total workflow input text |
+| `MAX_EXTRACTED_TEXT_BYTES` | Total extracted-text budget kept from accepted files |
+| `MAX_PASTED_TEXT_BYTES` | Maximum raw pasted text persisted on the run |
+| `MAX_TOTAL_WORKFLOW_TEXT_BYTES` | Maximum normalized text passed to future workflow steps |
 
 The app accepts either:
 
@@ -121,6 +124,32 @@ Follow-up constraints:
 - after that, the user must start a new run
 
 The backend now publishes these guardrails through the protected status and access-verification responses. The full brief workflow is still intentionally out of scope, and the codebase marks the workflow-enforcement boundary with explicit TODO text rather than faking unfinished behavior.
+
+## M3 ingestion behavior
+
+The run-ingestion endpoint accepts:
+
+- pasted text
+- `.txt` uploads
+- PDFs with extractable text
+
+The run-ingestion endpoint rejects:
+
+- images
+- OCR-only PDFs
+- audio/video
+- unsupported binary file types
+
+Trimming is deterministic and intentionally boring:
+
+- keep files in upload order until `MAX_FILES_PER_RUN`
+- reject files larger than `MAX_FILE_SIZE_BYTES`
+- extract text only from supported file types
+- keep the first bytes that fit within `MAX_EXTRACTED_TEXT_BYTES`
+- build normalized workflow text as pasted text first, then accepted files in upload order
+- trim normalized workflow text by keeping the first bytes that fit within `MAX_TOTAL_WORKFLOW_TEXT_BYTES`
+
+The backend does not imply that it ranked or fully evaluated dropped notes. If something is too large, the stored warnings say so plainly.
 
 ## Local development
 

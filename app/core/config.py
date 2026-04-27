@@ -55,6 +55,7 @@ class Settings(BaseSettings):
     max_total_workflow_text_bytes: int = Field(
         default=400_000, alias="MAX_TOTAL_WORKFLOW_TEXT_BYTES"
     )
+    max_pasted_text_bytes: int = Field(default=200_000, alias="MAX_PASTED_TEXT_BYTES")
 
     twilio_account_sid: str | None = Field(default=None, alias="TWILIO_ACCOUNT_SID")
     twilio_auth_token: str | None = Field(default=None, alias="TWILIO_AUTH_TOKEN")

@@ -21,6 +21,8 @@ pydantic-settings = "2.13.1"
 sqlalchemy = "2.0.39"
 uvicorn = { version = "0.34.0", extras = ["standard"] }
 starlette = ">=0.48,<0.49"
+pypdf = "5.9.0"
+python-multipart = "0.0.20"
 
 [tool.poetry.group.dev.dependencies]
 black = "25.1.0"
