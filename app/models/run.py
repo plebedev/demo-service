@@ -65,6 +65,9 @@ class Run(Base):
     output_brief_serialized: Mapped[str] = mapped_column(
         "output_brief_json", Text(), nullable=True
     )
+    post_processor_results_serialized: Mapped[str] = mapped_column(
+        "post_processor_results_json", Text(), nullable=True
+    )
     follow_up_count: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default="0"
     )

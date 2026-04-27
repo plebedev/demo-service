@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import re
 
 from pydantic import BaseModel, Field
 from pydantic_ai import RunContext
@@ -59,6 +60,115 @@ class PersistBriefDraftOutput(BaseModel):
     persisted: bool
 
 
+class TextToolInput(BaseModel):
+    """Generic text input for deterministic workflow helpers."""
+
+    text: str = ""
+
+
+class NormalizedInputOutput(BaseModel):
+    """Normalized note text prepared for downstream tools."""
+
+    text: str
+    line_count: int
+
+
+class NoteSection(BaseModel):
+    """One extracted note section."""
+
+    section_id: str
+    heading: str
+    text: str
+
+
+class SectionsInput(BaseModel):
+    """Input text for section splitting."""
+
+    text: str
+
+
+class SectionsOutput(BaseModel):
+    """Split note sections."""
+
+    sections: list[NoteSection]
+
+
+class SectionsToolInput(BaseModel):
+    """Section-based extraction input."""
+
+    sections: list[NoteSection]
+
+
+class ExtractedItem(BaseModel):
+    """Small structured finding extracted from the notes."""
+
+    text: str
+    source_section_id: str
+    confidence: float = Field(ge=0.0, le=1.0)
+
+
+class ExtractedItemsOutput(BaseModel):
+    """Collection of extracted findings."""
+
+    items: list[ExtractedItem]
+
+
+class ReconciliationInput(BaseModel):
+    """Input for duplicate and contradiction checks."""
+
+    claims: list[ExtractedItem] = Field(default_factory=list)
+    decisions: list[ExtractedItem] = Field(default_factory=list)
+    action_items: list[ExtractedItem] = Field(default_factory=list)
+
+
+class DuplicateFinding(BaseModel):
+    """Potential duplicate finding."""
+
+    text: str
+    source_section_ids: list[str]
+
+
+class DuplicateFindingsOutput(BaseModel):
+    """Duplicate-finding result."""
+
+    duplicates: list[DuplicateFinding]
+
+
+class ContradictionFinding(BaseModel):
+    """Potential contradiction finding."""
+
+    positive: str
+    negative: str
+    source_section_ids: list[str]
+
+
+class ContradictionFindingsOutput(BaseModel):
+    """Contradiction-finding result."""
+
+    contradictions: list[ContradictionFinding]
+
+
+class BriefInput(BaseModel):
+    """Structured findings used to produce the final brief."""
+
+    title: str | None = None
+    claims: list[ExtractedItem] = Field(default_factory=list)
+    decisions: list[ExtractedItem] = Field(default_factory=list)
+    action_items: list[ExtractedItem] = Field(default_factory=list)
+    duplicates: list[DuplicateFinding] = Field(default_factory=list)
+    contradictions: list[ContradictionFinding] = Field(default_factory=list)
+
+
+class BriefOutput(BaseModel):
+    """Final bounded brief payload stored on the run."""
+
+    title: str
+    executive_summary: str
+    sections: list[BriefSection]
+    open_questions: list[str] = Field(default_factory=list)
+    audit_notes: list[str] = Field(default_factory=list)
+
+
 async def load_run_context(ctx: RunContext[WorkflowAgentDeps]) -> RunContextOutput:
     """Return the normalized run data already persisted by ingestion."""
     run_payload = serialize_run(ctx.deps.run)
@@ -91,3 +201,218 @@ async def persist_brief_draft(
     ctx.deps.db.commit()
     ctx.deps.db.refresh(ctx.deps.run)
     return PersistBriefDraftOutput(run_id=ctx.deps.run.id, persisted=True)
+
+
+def normalize_input(payload: TextToolInput) -> NormalizedInputOutput:
+    """Normalize whitespace without changing the meaning of the notes."""
+    lines = [re.sub(r"\s+", " ", line).strip() for line in payload.text.splitlines()]
+    kept = [line for line in lines if line]
+    return NormalizedInputOutput(text="\n".join(kept), line_count=len(kept))
+
+
+def split_into_sections(payload: SectionsInput) -> SectionsOutput:
+    """Split notes into stable line/paragraph sections."""
+    raw_sections = re.split(r"\n{2,}|(?<=\n)", payload.text)
+    sections: list[NoteSection] = []
+    for index, raw_section in enumerate(raw_sections, start=1):
+        text = raw_section.strip()
+        if not text:
+            continue
+        heading = text.splitlines()[0][:80]
+        sections.append(
+            NoteSection(
+                section_id=f"s{len(sections) + 1}",
+                heading=heading,
+                text=text,
+            )
+        )
+    if not sections and payload.text.strip():
+        sections.append(
+            NoteSection(section_id="s1", heading="Notes", text=payload.text.strip())
+        )
+    return SectionsOutput(sections=sections)
+
+
+def extract_claims(payload: SectionsToolInput) -> ExtractedItemsOutput:
+    """Extract factual-looking claims from note sections."""
+    items = [
+        _item_from_section(section)
+        for section in payload.sections
+        if not _looks_like_action(section.text)
+        and not _looks_like_decision(section.text)
+    ]
+    return ExtractedItemsOutput(items=items)
+
+
+def extract_decisions(payload: SectionsToolInput) -> ExtractedItemsOutput:
+    """Extract decision-looking notes."""
+    items = [
+        _item_from_section(section)
+        for section in payload.sections
+        if _looks_like_decision(section.text)
+    ]
+    return ExtractedItemsOutput(items=items)
+
+
+def extract_action_items(payload: SectionsToolInput) -> ExtractedItemsOutput:
+    """Extract action-item-looking notes."""
+    items = [
+        _item_from_section(section)
+        for section in payload.sections
+        if _looks_like_action(section.text)
+    ]
+    return ExtractedItemsOutput(items=items)
+
+
+def find_duplicates(payload: ReconciliationInput) -> DuplicateFindingsOutput:
+    """Find repeated or near-repeated findings by normalized text."""
+    buckets: dict[str, list[ExtractedItem]] = {}
+    for item in [*payload.claims, *payload.decisions, *payload.action_items]:
+        key = re.sub(r"[^a-z0-9]+", " ", item.text.lower()).strip()
+        buckets.setdefault(key, []).append(item)
+    duplicates = [
+        DuplicateFinding(
+            text=items[0].text,
+            source_section_ids=sorted({item.source_section_id for item in items}),
+        )
+        for items in buckets.values()
+        if len(items) > 1
+    ]
+    return DuplicateFindingsOutput(duplicates=duplicates)
+
+
+def find_contradictions(payload: ReconciliationInput) -> ContradictionFindingsOutput:
+    """Find simple positive/negative tension in extracted findings."""
+    items = [*payload.claims, *payload.decisions, *payload.action_items]
+    negatives = [item for item in items if _contains_negative_signal(item.text)]
+    positives = [item for item in items if _contains_positive_signal(item.text)]
+    contradictions: list[ContradictionFinding] = []
+    for negative in negatives:
+        negative_terms = _meaningful_terms(negative.text)
+        for positive in positives:
+            if negative.source_section_id == positive.source_section_id:
+                continue
+            if negative_terms & _meaningful_terms(positive.text):
+                contradictions.append(
+                    ContradictionFinding(
+                        positive=positive.text,
+                        negative=negative.text,
+                        source_section_ids=[
+                            positive.source_section_id,
+                            negative.source_section_id,
+                        ],
+                    )
+                )
+                break
+    return ContradictionFindingsOutput(contradictions=contradictions)
+
+
+def format_brief(payload: BriefInput) -> BriefOutput:
+    """Format extracted findings into a concise structured brief."""
+    title = payload.title or "Messy notes brief"
+    summary_parts = []
+    if payload.claims:
+        summary_parts.append(f"{len(payload.claims)} grounded observations")
+    if payload.decisions:
+        summary_parts.append(f"{len(payload.decisions)} decisions")
+    if payload.action_items:
+        summary_parts.append(f"{len(payload.action_items)} action items")
+    executive_summary = (
+        "This brief summarizes "
+        + ", ".join(summary_parts)
+        + " from the submitted notes."
+        if summary_parts
+        else "The submitted notes did not contain enough structured detail for a rich brief."
+    )
+    sections = [
+        BriefSection(
+            heading="Key observations",
+            content=_join_items(payload.claims)
+            or "No clear factual claims were found.",
+        ),
+        BriefSection(
+            heading="Decisions",
+            content=_join_items(payload.decisions)
+            or "No explicit decisions were found.",
+        ),
+        BriefSection(
+            heading="Action items",
+            content=_join_items(payload.action_items)
+            or "No explicit action items were found.",
+        ),
+    ]
+    open_questions = [
+        "Resolve duplicate or overlapping notes before treating them as separate facts."
+        for _ in payload.duplicates[:1]
+    ]
+    open_questions.extend(
+        "Confirm contradictory notes before acting on the brief."
+        for _ in payload.contradictions[:1]
+    )
+    return BriefOutput(
+        title=title,
+        executive_summary=executive_summary,
+        sections=sections,
+        open_questions=open_questions,
+        audit_notes=[
+            f"Duplicate findings: {len(payload.duplicates)}",
+            f"Potential contradictions: {len(payload.contradictions)}",
+        ],
+    )
+
+
+def _item_from_section(section: NoteSection) -> ExtractedItem:
+    return ExtractedItem(
+        text=section.text,
+        source_section_id=section.section_id,
+        confidence=0.72,
+    )
+
+
+def _looks_like_decision(text: str) -> bool:
+    lowered = text.lower()
+    return any(
+        marker in lowered
+        for marker in ("decided", "decision", "approved", "will ", "we will")
+    )
+
+
+def _looks_like_action(text: str) -> bool:
+    lowered = text.lower()
+    return any(
+        marker in lowered
+        for marker in (
+            "todo",
+            "action",
+            "need ",
+            "needs ",
+            "ask ",
+            "owner",
+            "follow up",
+        )
+    )
+
+
+def _contains_negative_signal(text: str) -> bool:
+    return bool(
+        re.search(r"\b(no|not|blocked|cancel|delay|risk|cannot|won't)\b", text.lower())
+    )
+
+
+def _contains_positive_signal(text: str) -> bool:
+    return bool(
+        re.search(r"\b(yes|approved|will|go|ready|can|confirmed)\b", text.lower())
+    )
+
+
+def _meaningful_terms(text: str) -> set[str]:
+    stopwords = {"the", "and", "for", "with", "that", "this", "will", "not", "need"}
+    return {
+        term
+        for term in re.findall(r"[a-z0-9]{4,}", text.lower())
+        if term not in stopwords
+    }
+
+
+def _join_items(items: list[ExtractedItem]) -> str:
+    return "\n".join(f"- {item.text}" for item in items[:8])

@@ -122,6 +122,7 @@ class RunResponse(BaseModel):
     uploaded_files_json: list[UploadedRunFile] | None
     ingestion_summary_json: RunIngestionSummary | None
     output_brief_json: dict[str, object] | None
+    post_processor_results_json: dict[str, object] | None
     follow_up_count: int
 
 

@@ -21,6 +21,7 @@ def record_run_event(
     event = RunEvent(
         run_id=run.id,
         event_type=payload.event_type.value,
+        status=payload.status,
         agent_role=payload.agent_role,
         tool_name=payload.tool_name,
         tool_arguments_serialized=_serialize_json(payload.tool_arguments),
@@ -42,6 +43,7 @@ def serialize_run_event(event: RunEvent) -> RunEventResponse:
         id=event.id,
         run_id=event.run_id,
         event_type=RunEventType(event.event_type),
+        status=event.status,
         agent_role=event.agent_role,
         tool_name=event.tool_name,
         tool_arguments=_deserialize_json(event.tool_arguments_serialized),

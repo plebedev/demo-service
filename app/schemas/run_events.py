@@ -14,6 +14,7 @@ class RunEventPayload(BaseModel):
     """Structured event payload accepted by the recorder service."""
 
     event_type: RunEventType
+    status: str | None = None
     agent_role: str | None = None
     tool_name: str | None = None
     tool_arguments: dict[str, Any] | None = None
@@ -32,6 +33,7 @@ class RunEventResponse(BaseModel):
     id: int
     run_id: int
     event_type: RunEventType
+    status: str | None
     agent_role: str | None
     tool_name: str | None
     tool_arguments: dict[str, Any] | None
