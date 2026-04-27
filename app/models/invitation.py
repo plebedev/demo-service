@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Identity, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -13,7 +13,9 @@ class InvitationCode(Base):
 
     __tablename__ = "invitation_codes"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(
+        Integer, Identity(), primary_key=True, autoincrement=True
+    )
     code: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
     label: Mapped[str] = mapped_column(String(255), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
@@ -36,7 +38,9 @@ class InvitationRedemption(Base):
 
     __tablename__ = "invitation_redemptions"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(
+        Integer, Identity(), primary_key=True, autoincrement=True
+    )
     invitation_code_id: Mapped[int] = mapped_column(
         ForeignKey("invitation_codes.id"), nullable=False
     )

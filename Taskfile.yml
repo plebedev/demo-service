@@ -51,12 +51,12 @@ tasks:
 
   migrate:
     cmds:
-      - bash -lc 'set -a; source local/.env.backend; set +a; poetry run alembic upgrade head'
+      - bash -lc 'set -a; source local/.env.backend; set +a; poetry run python -m alembic upgrade head'
 
   makemigration:
     cmds:
       - test -n "${MESSAGE:-}" || (echo "Set MESSAGE=..." && exit 1)
-      - bash -lc 'set -a; source local/.env.backend; set +a; poetry run alembic revision --autogenerate -m "${MESSAGE}"'
+      - bash -lc 'set -a; source local/.env.backend; set +a; poetry run python -m alembic revision --autogenerate -m "${MESSAGE}"'
 
   docker-build:
     cmds:
@@ -68,7 +68,8 @@ tasks:
 
   apply-runtime-secret:
     cmds:
-      - SECRET_NAME="${SECRET_NAME:-backend-api-secrets}" NAMESPACE="${NAMESPACE:-demo}" DB_PASSWORD="${DB_PASSWORD:-}" bash ./deploy/scripts/apply-runtime-secret.sh
+      - 'test -n "{{.CLI_ARGS}}" || (echo "Usage: task apply-runtime-secret -- SECRET_KEY SECRET_VALUE [SECRET_KEY SECRET_VALUE ...]" && exit 1)'
+      - 'SECRET_NAME="${SECRET_NAME:-backend-api-secrets}" NAMESPACE="${NAMESPACE:-demo}" bash ./deploy/scripts/apply-runtime-secret.sh {{.CLI_ARGS}}'
 
   copy-bundle:
     cmds:

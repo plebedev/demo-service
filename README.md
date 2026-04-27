@@ -229,15 +229,21 @@ For the current Oracle Cloud demo shape:
 Create or update the runtime secret:
 
 ```bash
-DB_PASSWORD='your-app-rw-password' \
-ACCESS_TOKEN_SIGNING_KEY='replace-with-random-secret' \
-ADMIN_API_SECRET='replace-with-internal-admin-secret' \
-task apply-runtime-secret
+task apply-runtime-secret -- \
+  DB_PASSWORD 'your-app-rw-password' \
+  ACCESS_TOKEN_SIGNING_KEY 'replace-with-random-secret' \
+  ADMIN_API_SECRET 'replace-with-internal-admin-secret'
 ```
 
 The default secret name is `backend-api-secrets` in namespace `demo`.
 
 The demo values file is already wired to look for that existing secret.
+
+You can also update individual keys later without re-sending the others:
+
+```bash
+task apply-runtime-secret -- ADMIN_API_SECRET 'rotated-admin-secret'
+```
 
 ## Registry-free VM deployment
 
@@ -271,7 +277,7 @@ Useful variables:
 If you are deploying to a fresh cluster, apply the runtime secret first:
 
 ```bash
-DB_PASSWORD='your-app-rw-password' task apply-runtime-secret
+task apply-runtime-secret -- DB_PASSWORD 'your-app-rw-password'
 task ship-deploy
 ```
 
