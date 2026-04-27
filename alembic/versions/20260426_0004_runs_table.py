@@ -37,8 +37,8 @@ def upgrade() -> None:
         sa.Column("completed_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("failed_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("input_text", sa.Text(), nullable=True),
-        sa.Column("input_metadata_json", sa.JSON(), nullable=True),
-        sa.Column("output_brief_json", sa.JSON(), nullable=True),
+        sa.Column("input_metadata_json", sa.Text(), nullable=True),
+        sa.Column("output_brief_json", sa.Text(), nullable=True),
         sa.Column("follow_up_count", sa.Integer(), nullable=False, server_default="0"),
     )
 
