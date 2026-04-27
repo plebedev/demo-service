@@ -109,6 +109,7 @@ class RunResponse(BaseModel):
 
     id: int
     status: RunStatus
+    workflow_key: str
     title: str | None
     created_at: datetime
     updated_at: datetime

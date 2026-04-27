@@ -20,6 +20,9 @@ This repository is the phase-1 backend API for the invite-only demo. It mirrors 
 - persisted `runs` table for the M2 demo shell
 - normalized ingestion storage for M3: raw pasted text, accepted file extracts,
   and summary/warning metadata
+- YAML-backed workflow config loading for M4, including per-agent model/provider,
+  tool access, bounded handoffs, future parallel metadata, and post-processor references
+- `run_events` audit-log scaffolding for future workflow/post-run review
 - pytest coverage for invite validation, token validation, and protected route access control
   plus demo-run creation, retrieval, editing, submission, and deterministic ingestion coverage
 - Production Dockerfile
@@ -86,11 +89,18 @@ Important variables:
 | `ACCESS_TOKEN_SIGNING_KEY` | HMAC signing key for invite-issued access tokens |
 | `ACCESS_TOKEN_TTL_SECONDS` | Lifetime for the signed phase-1 access token |
 | `ADMIN_API_SECRET` | Shared secret for internal invitation-management endpoints |
+| `DEFAULT_WORKFLOW_KEY` | Workflow key assigned to newly created runs |
+| `WORKFLOW_CONFIG_DIR` | Directory containing workflow YAML definitions |
+| `POST_PROCESSOR_CONFIG_PATH` | YAML file defining workflow post-processors |
 | `MAX_FILES_PER_RUN` | Phase-1 placeholder limit for files per run |
 | `MAX_FILE_SIZE_BYTES` | Phase-1 placeholder limit for file upload size |
 | `MAX_EXTRACTED_TEXT_BYTES` | Total extracted-text budget kept from accepted files |
 | `MAX_PASTED_TEXT_BYTES` | Maximum raw pasted text persisted on the run |
 | `MAX_TOTAL_WORKFLOW_TEXT_BYTES` | Maximum normalized text passed to future workflow steps |
+| `OPENAI_API_KEY` | API key for workflow agents using OpenAI models |
+| `ANTHROPIC_API_KEY` | API key for workflow agents or post-processors using Anthropic models |
+| `FIREWORKS_API_KEY` | Reserved future provider key for FireworksAI |
+| `OPENROUTER_API_KEY` | Reserved future provider key for OpenRouter |
 
 The app accepts either:
 
@@ -150,6 +160,34 @@ Trimming is deterministic and intentionally boring:
 - trim normalized workflow text by keeping the first bytes that fit within `MAX_TOTAL_WORKFLOW_TEXT_BYTES`
 
 The backend does not imply that it ranked or fully evaluated dropped notes. If something is too large, the stored warnings say so plainly.
+
+## M4 workflow config
+
+Workflow definitions now live under:
+
+- `app/resources/workflows/*.yaml`
+- `app/resources/post_processors/post-processors.yaml`
+
+Startup loads and validates:
+
+- workflow keys and starting agents
+- duplicate agent roles
+- tool references against the registry
+- handoff targets
+- future parallel-peer metadata
+- workflow post-processor references
+
+The initial shipped workflow is `messy-notes-v1`, which configures:
+
+- `orchestrator`
+- `extractor`
+- `reconciler`
+- `brief_writer`
+
+This milestone does not yet implement the full runtime orchestration engine or
+final post-processor executor. It adds the typed config layer, PydanticAI model
+abstraction, tool registry, and run-event audit scaffolding those later
+milestones will build on.
 
 ## Local development
 
@@ -244,6 +282,12 @@ task test
 task lint
 task build
 task verify
+```
+
+You can also validate workflow config as part of startup by running:
+
+```bash
+poetry run python -c "from app.main import create_app; create_app()"
 ```
 
 ## Docker image

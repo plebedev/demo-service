@@ -53,12 +53,16 @@ def database_url(postgres_container: PostgresContainer) -> Iterator[str]:
         "ACCESS_TOKEN_SIGNING_KEY": os.environ.get("ACCESS_TOKEN_SIGNING_KEY"),
         "ACCESS_TOKEN_TTL_SECONDS": os.environ.get("ACCESS_TOKEN_TTL_SECONDS"),
         "ADMIN_API_SECRET": os.environ.get("ADMIN_API_SECRET"),
+        "OPENAI_API_KEY": os.environ.get("OPENAI_API_KEY"),
+        "ANTHROPIC_API_KEY": os.environ.get("ANTHROPIC_API_KEY"),
     }
 
     os.environ["DATABASE_URL"] = url
     os.environ["ACCESS_TOKEN_SIGNING_KEY"] = "test-signing-key"
     os.environ["ACCESS_TOKEN_TTL_SECONDS"] = "3600"
     os.environ["ADMIN_API_SECRET"] = "test-admin-secret"
+    os.environ["OPENAI_API_KEY"] = "test-openai-key"
+    os.environ["ANTHROPIC_API_KEY"] = "test-anthropic-key"
 
     get_settings.cache_clear()
     get_engine.cache_clear()
@@ -105,6 +109,7 @@ def reset_database(session_factory: sessionmaker[Session]) -> Generator[None, No
             text(
                 """
                 TRUNCATE TABLE
+                    run_events,
                     runs,
                     invitation_redemptions,
                     invitation_codes,

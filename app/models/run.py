@@ -28,6 +28,12 @@ class Run(Base):
         Integer, Identity(), primary_key=True, autoincrement=True
     )
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="draft")
+    workflow_key: Mapped[str] = mapped_column(
+        String(128),
+        nullable=False,
+        default="messy-notes-v1",
+        server_default="messy-notes-v1",
+    )
     title: Mapped[str] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

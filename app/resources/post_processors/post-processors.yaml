@@ -1,0 +1,21 @@
+post_processors:
+  - key: audit-tool-usage-and-handoffs
+    type: audit_tool_usage_and_handoffs
+    description: >
+      Future post-run audit that checks tool use and handoffs against the
+      configured workflow boundaries.
+    provider: anthropic
+    model: claude-3-5-haiku-latest
+    system_prompt: >
+      You audit the messy-notes demo workflow after a run finishes. Check
+      whether tools were used appropriately, whether handoffs stayed inside the
+      configured graph, and whether the run log is sufficient for review.
+    prompt_template: |
+      WORKFLOW: {workflow_key}
+      AGENT GRAPH: {agent_graph}
+      RUN EVENTS: {run_events}
+
+      Audit tool usage and handoff appropriateness for this run.
+    temperature: 0.0
+    max_tokens: 1200
+    timeout: 30

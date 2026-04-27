@@ -16,7 +16,8 @@ class ProviderStatuses(BaseModel):
 
     twilio: ProviderStatus
     plivo: ProviderStatus
-    llm: ProviderStatus
+    openai: ProviderStatus
+    anthropic: ProviderStatus
 
 
 class HealthResponse(BaseModel):

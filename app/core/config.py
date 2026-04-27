@@ -47,6 +47,16 @@ class Settings(BaseSettings):
     admin_api_secret: str = Field(
         default="demo-admin-change-me", alias="ADMIN_API_SECRET"
     )
+    default_workflow_key: str = Field(
+        default="messy-notes-v1", alias="DEFAULT_WORKFLOW_KEY"
+    )
+    workflow_config_dir: str = Field(
+        default="app/resources/workflows", alias="WORKFLOW_CONFIG_DIR"
+    )
+    post_processor_config_path: str = Field(
+        default="app/resources/post_processors/post-processors.yaml",
+        alias="POST_PROCESSOR_CONFIG_PATH",
+    )
     max_files_per_run: int = Field(default=3, alias="MAX_FILES_PER_RUN")
     max_file_size_bytes: int = Field(default=5_242_880, alias="MAX_FILE_SIZE_BYTES")
     max_extracted_text_bytes: int = Field(
@@ -61,7 +71,10 @@ class Settings(BaseSettings):
     twilio_auth_token: str | None = Field(default=None, alias="TWILIO_AUTH_TOKEN")
     plivo_auth_id: str | None = Field(default=None, alias="PLIVO_AUTH_ID")
     plivo_auth_token: str | None = Field(default=None, alias="PLIVO_AUTH_TOKEN")
-    llm_api_key: str | None = Field(default=None, alias="LLM_API_KEY")
+    openai_api_key: str | None = Field(default=None, alias="OPENAI_API_KEY")
+    anthropic_api_key: str | None = Field(default=None, alias="ANTHROPIC_API_KEY")
+    fireworks_api_key: str | None = Field(default=None, alias="FIREWORKS_API_KEY")
+    openrouter_api_key: str | None = Field(default=None, alias="OPENROUTER_API_KEY")
 
     @classmethod
     def settings_customise_sources(

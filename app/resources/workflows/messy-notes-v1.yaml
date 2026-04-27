@@ -1,0 +1,78 @@
+key: messy-notes-v1
+description: >
+  Demo workflow for turning messy notes into a structured brief with bounded
+  agent handoffs and future-ready auditing hooks.
+starting_agent: orchestrator
+post_processors:
+  - audit-tool-usage-and-handoffs
+flags:
+  allow_single_follow_up: true
+  require_structured_brief_output: true
+  audit_run_events: true
+agents:
+  - role: orchestrator
+    provider: openai
+    model: gpt-5-mini
+    system_prompt: >
+      You coordinate the messy-notes demo. Stay inside the invite-only demo
+      scope, keep the workflow bounded, and hand off only to configured agents.
+      Do not drift into generic chat. If the notes are incomplete, surface that
+      plainly instead of inventing missing facts.
+    temperature: 0.1
+    max_tokens: 1200
+    timeout: 30
+    tools:
+      - load_run_context
+    can_handoff_to:
+      - extractor
+      - reconciler
+  - role: extractor
+    provider: anthropic
+    model: claude-3-5-haiku-latest
+    system_prompt: >
+      Extract concrete facts, open questions, and conflicts from the persisted
+      run input. Stay grounded in the provided notes and flag uncertainty
+      instead of smoothing it over.
+    temperature: 0.0
+    max_tokens: 1600
+    timeout: 30
+    tools:
+      - load_run_context
+    can_handoff_to:
+      - reconciler
+    parallel:
+      enabled: true
+      group: extraction
+      can_run_with:
+        - brief_writer
+  - role: reconciler
+    provider: openai
+    model: gpt-5-mini
+    system_prompt: >
+      Reconcile extracted findings into one consistent view of the messy notes.
+      Call out disagreements, missing evidence, and assumptions that still need
+      confirmation before a brief is finalized.
+    temperature: 0.0
+    max_tokens: 1400
+    timeout: 30
+    tools:
+      - load_run_context
+    can_handoff_to:
+      - brief_writer
+  - role: brief_writer
+    provider: anthropic
+    model: claude-3-5-sonnet-latest
+    system_prompt: >
+      Write a concise structured brief from the reconciled notes. Keep the
+      output practical, bounded, and honest about any unresolved questions.
+    temperature: 0.2
+    max_tokens: 1800
+    timeout: 45
+    tools:
+      - load_run_context
+      - persist_brief_draft
+    can_handoff_to: []
+    parallel:
+      enabled: false
+      group: synthesis
+      can_run_with: []
