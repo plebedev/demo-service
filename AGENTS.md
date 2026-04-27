@@ -40,6 +40,7 @@ Defaults:
 
 - backend uses `DATABASE_URL`
 - expected local DB is Postgres
+- local Postgres exists only for development speed and convenience
 
 ### Deployed
 
@@ -49,6 +50,7 @@ Defaults:
   - `DB_PASSWORD`
 - current deployed DB user is `APP_RW`
 - Oracle service should be the `..._tp` service for the API workload
+- production database compatibility means Oracle compatibility
 
 ## Migration rules
 
@@ -57,8 +59,12 @@ Defaults:
 - Local migration commands:
   - `task migrate`
   - `MESSAGE=... task makemigration`
+- Postgres is not the source of truth for migration behavior
+- Every migration must be written to run correctly against Oracle in deployed environments
+- A migration that works only on local Postgres is considered incorrect
 - Future migration changes must be checked for Oracle compatibility, not only Postgres compatibility
 - Avoid raw SQL that assumes Postgres semantics when SQLAlchemy can express it portably
+- If raw SQL is necessary, write it with Oracle behavior in mind first and then verify the local Postgres path separately
 
 ## Deployment model
 
@@ -94,9 +100,11 @@ Defaults:
 - frontend reaches backend through BFF and cluster DNS
 - local DB is Postgres for speed and convenience
 - deployed DB is Oracle Autonomous Database
+- when local and production database behavior differ, optimize for production Oracle correctness
 
 ## When making changes
 
 - If you change env conventions, update `README.md`, `.env.example`, `local/.env.backend.example`, and Helm values together
 - If you change SQL used in readiness/status or migrations, consider Oracle syntax differences first
 - If you change API responses used by the frontend, update `demo-web-app` in the same session when possible
+- Do not mark migration work complete until the Oracle production path has been considered explicitly

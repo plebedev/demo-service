@@ -10,13 +10,16 @@ This repository is the phase-1 backend API for the invite-only demo. It mirrors 
   - `/api/status` protected by a signed phase-1 access token
   - `/api/access/redeem` for invitation-code validation and token issuance
   - `/api/access/verify` for stored-token validation
+  - `/api/runs/*` protected endpoints for draft creation, listing, editing, and submission
   - `/api/internal/admin/invitations/*` for internal invite management
   - placeholder webhook endpoints for Twilio and Plivo
 - SQLAlchemy 2.x models and sessions
 - Pydantic 2 settings and response models
 - Alembic config and an initial migration
 - invitation code and redemption tracking tables
+- persisted `runs` table for the M2 demo shell
 - pytest coverage for invite validation, token validation, and protected route access control
+  plus demo-run creation, retrieval, editing, and submit transition coverage
 - Production Dockerfile
 - `local/` Docker Compose for Postgres-backed local development
 - `deploy/` Helm chart and VM ship-deploy scripts
@@ -53,9 +56,18 @@ This repository is the phase-1 backend API for the invite-only demo. It mirrors 
 
 ## Configuration
 
-The application has a single configuration-loading path: environment variables only.
+The backend now supports two configuration modes:
 
-- Local development: copy local env examples and export them into your shell
+- Local development: auto-load `local/.env.backend`
+- Deployed environments: use real environment variables only
+
+When `ENVIRONMENT=local` or `ENVIRONMENT` is unset, the app loads
+`local/.env.backend` automatically. When `ENVIRONMENT` is anything else such as
+`demo` or `production`, the dotenv file is ignored and only process
+environment variables are used.
+
+You can override the local dotenv path for one-off runs with `LOCAL_ENV_FILE`.
+
 - Kubernetes: inject config via ConfigMap and secrets via Helm/Kubernetes Secret
 
 Important variables:
@@ -132,21 +144,13 @@ cp local/.env.backend.example local/.env.backend
 task local-up
 ```
 
-4. Export local app settings:
-
-```bash
-set -a
-source local/.env.backend
-set +a
-```
-
-5. Apply migrations:
+4. Apply migrations:
 
 ```bash
 task migrate
 ```
 
-6. Run the API:
+5. Run the API:
 
 ```bash
 task dev
@@ -190,7 +194,17 @@ MESSAGE=add-new-table task makemigration
 
 The initial scaffold includes one migration that creates the `example_records` table.
 
-The local `task dev`, `task migrate`, and `task makemigration` commands automatically source `local/.env.backend` before running.
+Local config files have separate roles:
+
+- `local/.env.backend`
+  Backend application settings for local development. The app now reads this
+  file automatically in local mode.
+- `local/.env.postgres`
+  Docker Compose settings for the local Postgres container only.
+
+The local `task dev`, `task migrate`, and `task makemigration` commands no
+longer need an explicit `source local/.env.backend` step because the backend
+loads that file itself in local mode.
 
 ## Tests
 
@@ -200,6 +214,7 @@ Run the normal backend checks with:
 task test
 task lint
 task build
+task verify
 ```
 
 ## Docker image
@@ -229,15 +244,21 @@ For the current Oracle Cloud demo shape:
 Create or update the runtime secret:
 
 ```bash
-DB_PASSWORD='your-app-rw-password' \
-ACCESS_TOKEN_SIGNING_KEY='replace-with-random-secret' \
-ADMIN_API_SECRET='replace-with-internal-admin-secret' \
-task apply-runtime-secret
+task apply-runtime-secret -- \
+  DB_PASSWORD 'your-app-rw-password' \
+  ACCESS_TOKEN_SIGNING_KEY 'replace-with-random-secret' \
+  ADMIN_API_SECRET 'replace-with-internal-admin-secret'
 ```
 
 The default secret name is `backend-api-secrets` in namespace `demo`.
 
 The demo values file is already wired to look for that existing secret.
+
+You can also update individual keys later without re-sending the others:
+
+```bash
+task apply-runtime-secret -- ADMIN_API_SECRET 'rotated-admin-secret'
+```
 
 ## Registry-free VM deployment
 
@@ -271,7 +292,7 @@ Useful variables:
 If you are deploying to a fresh cluster, apply the runtime secret first:
 
 ```bash
-DB_PASSWORD='your-app-rw-password' task apply-runtime-secret
+task apply-runtime-secret -- DB_PASSWORD 'your-app-rw-password'
 task ship-deploy
 ```
 

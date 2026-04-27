@@ -6,9 +6,6 @@ from dataclasses import dataclass
 
 from app.core.security import create_access_token, verify_access_token
 from app.db.models import InvitationCode, InvitationRedemption
-from app.db.session import get_session_factory
-
-
 @dataclass(frozen=True)
 class TokenTestSettings:
     """Small settings stub for token helper unit tests."""
@@ -101,7 +98,9 @@ def test_protected_status_endpoint_requires_valid_token(client) -> None:
     assert authenticated.json()["phase1"]["limits"]["max_files_per_run"] == 3
 
 
-def test_redeeming_code_increments_usage_and_creates_redemption(client) -> None:
+def test_redeeming_code_increments_usage_and_creates_redemption(
+    client, db_session
+) -> None:
     created = create_code(client, "tracked-code")
 
     redeem = client.post(
@@ -111,21 +110,17 @@ def test_redeeming_code_increments_usage_and_creates_redemption(client) -> None:
     )
     assert redeem.status_code == 200
 
-    session = get_session_factory()()
-    try:
-        invitation_code = session.get(InvitationCode, created["id"])
-        redemption = (
-            session.query(InvitationRedemption)
-            .filter(InvitationRedemption.invitation_code_id == created["id"])
-            .one()
-        )
-        assert invitation_code is not None
-        assert invitation_code.use_count == 1
-        assert invitation_code.last_used_at is not None
-        assert redemption.user_agent == "pytest-agent"
-        assert redemption.ip_hash is not None
-    finally:
-        session.close()
+    invitation_code = db_session.get(InvitationCode, created["id"])
+    redemption = (
+        db_session.query(InvitationRedemption)
+        .filter(InvitationRedemption.invitation_code_id == created["id"])
+        .one()
+    )
+    assert invitation_code is not None
+    assert invitation_code.use_count == 1
+    assert invitation_code.last_used_at is not None
+    assert redemption.user_agent == "pytest-agent"
+    assert redemption.ip_hash is not None
 
 
 def test_admin_stats_and_list_endpoints(client) -> None:
