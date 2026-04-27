@@ -81,6 +81,7 @@ def test_create_and_get_run(client, db_session) -> None:
     assert created.status_code == 201
     payload = created.json()
     assert payload["status"] == "draft"
+    assert payload["workflow_key"] == "messy-notes-v1"
     assert payload["title"] == "Ops intake"
     assert payload["input_text"] == "line one\nline two"
     assert payload["submitted_at"] is None

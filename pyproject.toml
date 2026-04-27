@@ -23,6 +23,8 @@ uvicorn = { version = "0.34.0", extras = ["standard"] }
 starlette = ">=0.48,<0.49"
 pypdf = "5.9.0"
 python-multipart = "0.0.20"
+pydantic-ai = "1.17.0"
+pyyaml = "6.0.3"
 
 [tool.poetry.group.dev.dependencies]
 black = "25.1.0"
@@ -35,6 +37,11 @@ testcontainers = ">=4.14,<4.15"
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
+filterwarnings = [
+    "ignore:You should use `Logger` instead\\.:DeprecationWarning",
+    "ignore:You should use `LoggerProvider` instead\\.:DeprecationWarning",
+    "ignore:You should use `ProxyLoggerProvider` instead\\.:DeprecationWarning",
+]
 
 [tool.black]
 line-length = 88

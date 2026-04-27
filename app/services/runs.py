@@ -31,6 +31,7 @@ def create_run(db: Session, payload: RunCreateRequest) -> Run:
     """Persist a newly created draft run."""
     run = Run(
         status=RunStatus.DRAFT.value,
+        workflow_key=get_settings().default_workflow_key,
         title=cast(Any, _normalize_title(payload.title)),
         input_text=cast(Any, _normalize_text(payload.input_text)),
     )
@@ -137,6 +138,7 @@ def serialize_run(run: Run) -> RunResponse:
     return RunResponse(
         id=run.id,
         status=RunStatus(run.status),
+        workflow_key=run.workflow_key,
         title=run.title,
         created_at=run.created_at,
         updated_at=run.updated_at,

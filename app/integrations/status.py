@@ -13,5 +13,6 @@ def provider_statuses(settings: Settings) -> ProviderStatuses:
         plivo=ProviderStatus(
             configured=bool(settings.plivo_auth_id and settings.plivo_auth_token)
         ),
-        llm=ProviderStatus(configured=bool(settings.llm_api_key)),
+        openai=ProviderStatus(configured=bool(settings.openai_api_key)),
+        anthropic=ProviderStatus(configured=bool(settings.anthropic_api_key)),
     )
