@@ -2,7 +2,16 @@
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Identity, Integer, String, func
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Identity,
+    Integer,
+    String,
+    Text,
+    func,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -52,3 +61,24 @@ class InvitationRedemption(Base):
     ip_hash: Mapped[str] = mapped_column(String(64), nullable=True)
 
     invitation_code: Mapped[InvitationCode] = relationship(back_populates="redemptions")
+
+
+class InvitationRequest(Base):
+    """Public request for future invite review."""
+
+    __tablename__ = "invitation_requests"
+
+    id: Mapped[int] = mapped_column(
+        Integer, Identity(), primary_key=True, autoincrement=True
+    )
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    email: Mapped[str] = mapped_column(String(320), nullable=False, index=True)
+    reason: Mapped[str] = mapped_column(Text(), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="submitted", server_default="submitted"
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    user_agent: Mapped[str] = mapped_column(String(512), nullable=True)
+    ip_hash: Mapped[str] = mapped_column(String(64), nullable=True)

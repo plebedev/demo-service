@@ -60,6 +60,20 @@ class PersistBriefDraftOutput(BaseModel):
     persisted: bool
 
 
+class CaptureNotificationPreferenceInput(BaseModel):
+    """Input for future notification preference capture tool."""
+
+    wants_sms: bool
+    phone_number: str | None = None
+
+
+class CaptureNotificationPreferenceOutput(BaseModel):
+    """Acknowledgement returned by notification preference capture."""
+
+    wants_sms: bool
+    stored: bool
+
+
 class TextToolInput(BaseModel):
     """Generic text input for deterministic workflow helpers."""
 
@@ -201,6 +215,30 @@ async def persist_brief_draft(
     ctx.deps.db.commit()
     ctx.deps.db.refresh(ctx.deps.run)
     return PersistBriefDraftOutput(run_id=ctx.deps.run.id, persisted=True)
+
+
+async def capture_notification_preference(
+    ctx: RunContext[WorkflowAgentDeps],
+    preference: CaptureNotificationPreferenceInput,
+) -> CaptureNotificationPreferenceOutput:
+    """Persist notification preference without sending a message."""
+    if ctx.deps.db is None:
+        raise RuntimeError("A database session is required to capture preferences.")
+
+    from app.schemas.runs import NotificationPreferenceRequest
+    from app.services.notifications import capture_notification_preference as capture
+
+    capture(
+        ctx.deps.db,
+        ctx.deps.run,
+        NotificationPreferenceRequest(
+            wants_sms=preference.wants_sms,
+            phone_number=preference.phone_number,
+        ),
+    )
+    return CaptureNotificationPreferenceOutput(
+        wants_sms=preference.wants_sms, stored=True
+    )
 
 
 def normalize_input(payload: TextToolInput) -> NormalizedInputOutput:

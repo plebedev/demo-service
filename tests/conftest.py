@@ -115,6 +115,7 @@ def reset_database(
                 TRUNCATE TABLE
                     run_events,
                     runs,
+                    invitation_requests,
                     invitation_redemptions,
                     invitation_codes,
                     example_records

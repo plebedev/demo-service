@@ -102,6 +102,55 @@ class RunSubmitRequest(BaseModel):
     input_metadata_json: RunInputMetadata | None = None
 
 
+class SampleChaosSet(BaseModel):
+    """Curated sample notes users can load into a run."""
+
+    key: str
+    title: str
+    description: str
+    notes: list[str]
+
+
+class SampleChaosListResponse(BaseModel):
+    """Protected sample-set catalog response."""
+
+    samples: list[SampleChaosSet]
+
+
+class SampleChaosApplyRequest(BaseModel):
+    """Request for applying a curated sample set to a run."""
+
+    sample_key: str = Field(min_length=1)
+
+
+class FollowUpRequest(BaseModel):
+    """One guarded follow-up question about the generated brief."""
+
+    question: str = Field(min_length=3, max_length=500)
+
+
+class FollowUpResponse(BaseModel):
+    """Stored answer for the single allowed follow-up."""
+
+    question: str
+    answer: str
+    category: str
+
+
+class NotificationPreference(BaseModel):
+    """Captured notification preference for a run."""
+
+    wants_sms: bool
+    phone_number: str | None = None
+
+
+class NotificationPreferenceRequest(BaseModel):
+    """Request body for storing notification preference."""
+
+    wants_sms: bool
+    phone_number: str | None = Field(default=None, max_length=32)
+
+
 class RunResponse(BaseModel):
     """Serialized run record returned to the frontend."""
 
@@ -124,6 +173,8 @@ class RunResponse(BaseModel):
     output_brief_json: dict[str, object] | None
     post_processor_results_json: dict[str, object] | None
     follow_up_count: int
+    follow_up_response_json: FollowUpResponse | None
+    notification_preference_json: NotificationPreference | None
 
 
 class RunListResponse(BaseModel):

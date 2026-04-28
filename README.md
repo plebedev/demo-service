@@ -13,6 +13,7 @@ routing.
   - `/ready`
   - `/api/status` protected by a signed phase-1 access token
   - `/api/access/redeem` for invitation-code validation and token issuance
+  - `/api/access/invite-requests` for public invite request intake
   - `/api/access/verify` for stored-token validation
   - `/api/runs/*` protected endpoints for draft creation, listing, editing, and submission
   - `/api/internal/admin/invitations/*` for internal invite management
@@ -134,14 +135,47 @@ Not supported in phase 1:
 Follow-up constraints:
 
 - one generated brief per run
-- follow-up count is initialized and stored with each run
-- broad follow-up chat is not implemented yet
-- any later follow-up behavior should stay scoped to the generated brief
+- exactly one brief-scoped follow-up question per completed run
+- second follow-ups are rejected
+- unrelated broad chat is rejected
+- follow-up response state is stored with the run
 
 The backend publishes these guardrails through the protected status and
 access-verification responses. Submitted runs execute the bounded messy-notes
 workflow, persist a generated brief, store structured run events, and run the
 tool/handoff audit post-processor.
+
+## Invite request intake
+
+Visitors without an invitation code can submit a simple invite request through:
+
+```text
+POST /api/access/invite-requests
+```
+
+The endpoint stores name, normalized email, short reason, request status, user
+agent, and an IP hash for later manual review. It does not approve access,
+issue invitation codes, send emails, or expose a public admin UI.
+
+## M6 demo polish APIs
+
+M6 adds protected API support for first-run usability and bounded follow-up:
+
+- `GET /api/runs/samples` returns curated messy-note sample sets
+- `POST /api/runs/<run_id>/sample` loads one sample set into a draft run
+- `POST /api/runs/<run_id>/follow-up` answers exactly one brief-scoped follow-up
+- `POST /api/runs/<run_id>/notification-preference` stores optional SMS preference and a normalized US phone number
+
+Notification sending is intentionally not an LLM tool. The service persists the
+preference on the run and leaves actual SMS delivery as a coded completion path.
+
+Run tests are part of the normal workflow:
+
+```bash
+task test
+task lint
+task build
+```
 
 ## M3 ingestion behavior
 

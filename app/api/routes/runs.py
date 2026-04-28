@@ -13,14 +13,24 @@ from app.core.config import get_settings
 from app.db.session import get_db_session
 from app.schemas.run_events import RunEventResponse
 from app.schemas.runs import (
+    FollowUpRequest,
+    NotificationPreferenceRequest,
     RunCreateRequest,
     RunListResponse,
     RunResponse,
+    SampleChaosApplyRequest,
+    SampleChaosListResponse,
     RunSubmitRequest,
     RunUpdateRequest,
 )
+from app.services.follow_up import answer_follow_up
+from app.services.notifications import (
+    capture_notification_preference,
+    maybe_send_completion_notification,
+)
 from app.services.run_events import serialize_run_event
 from app.services.runs import (
+    apply_sample_chaos_to_run,
     create_run,
     get_run_or_404,
     ingest_run_draft,
@@ -30,6 +40,7 @@ from app.services.runs import (
     submit_run,
     update_run_draft,
 )
+from app.services.sample_chaos import list_sample_chaos_sets
 from app.services.workflow_executor import execute_run_workflow, get_run_events
 
 router = APIRouter(
@@ -54,6 +65,12 @@ def create_run_route(
     return serialize_run(create_run(db, payload))
 
 
+@router.get("/samples", response_model=SampleChaosListResponse)
+def list_sample_chaos_route() -> SampleChaosListResponse:
+    """Return curated sample note sets for the demo."""
+    return SampleChaosListResponse(samples=list_sample_chaos_sets())
+
+
 @router.get("/{run_id}", response_model=RunResponse)
 def get_run_route(run_id: int, db: Session = Depends(get_db_session)) -> RunResponse:
     """Return one persisted run."""
@@ -69,6 +86,39 @@ def update_run_route(
     """Update the editable draft fields of a run."""
     run = get_run_or_404(db, run_id)
     return serialize_run(update_run_draft(db, run, payload))
+
+
+@router.post("/{run_id}/sample", response_model=RunResponse)
+def apply_sample_chaos_route(
+    run_id: int,
+    payload: SampleChaosApplyRequest,
+    db: Session = Depends(get_db_session),
+) -> RunResponse:
+    """Load a curated sample chaos set into a draft run."""
+    run = get_run_or_404(db, run_id)
+    return serialize_run(apply_sample_chaos_to_run(db, run, payload.sample_key))
+
+
+@router.post("/{run_id}/notification-preference", response_model=RunResponse)
+def notification_preference_route(
+    run_id: int,
+    payload: NotificationPreferenceRequest,
+    db: Session = Depends(get_db_session),
+) -> RunResponse:
+    """Capture optional future SMS completion notification preference."""
+    run = get_run_or_404(db, run_id)
+    return serialize_run(capture_notification_preference(db, run, payload))
+
+
+@router.post("/{run_id}/follow-up", response_model=RunResponse)
+def follow_up_route(
+    run_id: int,
+    payload: FollowUpRequest,
+    db: Session = Depends(get_db_session),
+) -> RunResponse:
+    """Answer the one guarded follow-up question for a completed run."""
+    run = get_run_or_404(db, run_id)
+    return serialize_run(answer_follow_up(db, run, payload))
 
 
 @router.post("/{run_id}/ingest", response_model=RunResponse)
@@ -107,6 +157,7 @@ async def submit_run_route(
         request.app.state.workflow_registry,
         get_settings(),
     )
+    maybe_send_completion_notification(executed)
     return serialize_run(executed)
 
 

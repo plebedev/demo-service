@@ -12,15 +12,48 @@ from app.core.config import Settings, get_settings
 from app.core.phase1 import build_phase1_guardrails
 from app.core.security import AccessTokenClaims
 from app.core.security import create_access_token, hash_ip_address
-from app.db.models import InvitationCode, InvitationRedemption
+from app.db.models import InvitationCode, InvitationRedemption, InvitationRequest
 from app.db.session import get_db_session
 from app.schemas.access import (
     AccessTokenResponse,
     AccessTokenVerificationResponse,
+    InviteRequestCreate,
+    InviteRequestResponse,
     RedeemInvitationRequest,
 )
 
 router = APIRouter(prefix="/api/access", tags=["access"])
+
+
+@router.post(
+    "/invite-requests",
+    response_model=InviteRequestResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_invite_request(
+    payload: InviteRequestCreate,
+    request: Request,
+    db: Session = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
+) -> InviteRequestResponse:
+    """Persist a public invite request for later manual review."""
+    invite_request = InvitationRequest(
+        name=payload.name,
+        email=payload.email,
+        reason=payload.reason,
+        user_agent=request.headers.get("user-agent"),
+        ip_hash=hash_ip_address(
+            request.client.host if request.client is not None else None, settings
+        ),
+    )
+    db.add(invite_request)
+    db.commit()
+    db.refresh(invite_request)
+    return InviteRequestResponse(
+        id=invite_request.id,
+        status=invite_request.status,
+        message="Invite request received for manual review.",
+    )
 
 
 @router.post("/redeem", response_model=AccessTokenResponse)
