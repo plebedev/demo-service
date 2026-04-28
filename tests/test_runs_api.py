@@ -475,3 +475,111 @@ def test_ingest_endpoint_requires_access_token(client) -> None:
     )
     assert response.status_code == 401
     assert response.json()["detail"] == "Access token required."
+
+
+def test_sample_chaos_loading_works(client, db_session) -> None:
+    headers = access_headers(client, "runs-samples")
+    created = client.post("/api/runs", headers=headers, json={})
+    run_id = created.json()["id"]
+
+    catalog = client.get("/api/runs/samples", headers=headers)
+    assert catalog.status_code == 200
+    samples = catalog.json()["samples"]
+    assert len(samples) >= 4
+
+    loaded = client.post(
+        f"/api/runs/{run_id}/sample",
+        headers=headers,
+        json={"sample_key": samples[0]["key"]},
+    )
+    assert loaded.status_code == 200
+    payload = loaded.json()
+    assert payload["title"] == samples[0]["title"]
+    assert samples[0]["notes"][0] in payload["input_text"]
+    assert payload["input_metadata_json"]["source_kind"].startswith("sample:")
+
+    stored = db_session.get(Run, run_id)
+    assert stored is not None
+    assert stored.normalized_input_text is not None
+
+
+def test_follow_up_allowed_exactly_once_and_persists(client, db_session) -> None:
+    headers = access_headers(client, "runs-follow-up-once")
+    created = client.post(
+        "/api/runs",
+        headers=headers,
+        json={"title": "Follow-up brief", "input_text": "Decision approved"},
+    )
+    run_id = created.json()["id"]
+    submitted = client.post(f"/api/runs/{run_id}/submit", headers=headers)
+    assert submitted.status_code == 200
+
+    follow_up = client.post(
+        f"/api/runs/{run_id}/follow-up",
+        headers=headers,
+        json={"question": "Summarize only decisions from the brief?"},
+    )
+    assert follow_up.status_code == 200
+    payload = follow_up.json()
+    assert payload["follow_up_count"] == 1
+    assert payload["follow_up_response_json"]["category"] == "decisions"
+
+    second = client.post(
+        f"/api/runs/{run_id}/follow-up",
+        headers=headers,
+        json={"question": "Clarify a contradiction?"},
+    )
+    assert second.status_code == 409
+
+    stored = db_session.get(Run, run_id)
+    assert stored is not None
+    assert stored.follow_up_count == 1
+    assert stored.follow_up_response_serialized is not None
+
+
+def test_unrelated_follow_up_is_rejected(client) -> None:
+    headers = access_headers(client, "runs-follow-up-unrelated")
+    created = client.post(
+        "/api/runs",
+        headers=headers,
+        json={"title": "Follow-up brief", "input_text": "Decision approved"},
+    )
+    run_id = created.json()["id"]
+    assert client.post(f"/api/runs/{run_id}/submit", headers=headers).status_code == 200
+
+    response = client.post(
+        f"/api/runs/{run_id}/follow-up",
+        headers=headers,
+        json={"question": "Write me a recipe for lunch?"},
+    )
+    assert response.status_code == 400
+    assert "Follow-up must stay about this brief" in response.json()["detail"]
+
+
+def test_notification_preference_capture_validates_us_phone(client, db_session) -> None:
+    headers = access_headers(client, "runs-notify")
+    created = client.post("/api/runs", headers=headers, json={})
+    run_id = created.json()["id"]
+
+    invalid = client.post(
+        f"/api/runs/{run_id}/notification-preference",
+        headers=headers,
+        json={"wants_sms": True, "phone_number": "12345"},
+    )
+    assert invalid.status_code == 422
+
+    valid = client.post(
+        f"/api/runs/{run_id}/notification-preference",
+        headers=headers,
+        json={"wants_sms": True, "phone_number": "(415) 555-0134"},
+    )
+    assert valid.status_code == 200
+    payload = valid.json()
+    assert payload["notification_preference_json"] == {
+        "wants_sms": True,
+        "phone_number": "+14155550134",
+    }
+
+    stored = db_session.get(Run, run_id)
+    assert stored is not None
+    assert stored.notification_preference_serialized is not None

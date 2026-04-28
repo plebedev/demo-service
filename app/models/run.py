@@ -71,3 +71,9 @@ class Run(Base):
     follow_up_count: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default="0"
     )
+    follow_up_response_serialized: Mapped[str] = mapped_column(
+        "follow_up_response_json", Text(), nullable=True
+    )
+    notification_preference_serialized: Mapped[str] = mapped_column(
+        "notification_preference_json", Text(), nullable=True
+    )

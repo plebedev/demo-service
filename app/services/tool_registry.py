@@ -12,6 +12,8 @@ from pydantic_ai import Tool
 from app.workflows.tools import (
     BriefInput,
     BriefOutput,
+    CaptureNotificationPreferenceInput,
+    CaptureNotificationPreferenceOutput,
     ContradictionFindingsOutput,
     DuplicateFindingsOutput,
     ExtractedItemsOutput,
@@ -26,6 +28,7 @@ from app.workflows.tools import (
     SectionsToolInput,
     TextToolInput,
     WorkflowAgentDeps,
+    capture_notification_preference,
     extract_action_items,
     extract_claims,
     extract_decisions,
@@ -213,6 +216,18 @@ def build_tool_registry() -> WorkflowToolRegistry:
                 category=ToolCategory.READ_ONLY,
                 input_model=BriefInput,
                 output_model=BriefOutput,
+            ),
+            ToolRegistryEntry(
+                name="capture_notification_preference",
+                description="Store optional SMS notification preference for a run.",
+                prompt_instructions=(
+                    "Use only to store explicit notification preference and phone number. "
+                    "Do not send SMS from the workflow."
+                ),
+                implementation=capture_notification_preference,
+                category=ToolCategory.MUTATIVE,
+                input_model=CaptureNotificationPreferenceInput,
+                output_model=CaptureNotificationPreferenceOutput,
             ),
         ]
     )

@@ -13,6 +13,8 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.models.run import Run, RunStatus
 from app.schemas.runs import (
+    FollowUpResponse,
+    NotificationPreference,
     RunCreateRequest,
     RunIngestionSummary,
     RunInputMetadata,
@@ -63,6 +65,39 @@ def update_run_draft(db: Session, run: Run, payload: RunUpdateRequest) -> Run:
     run.input_metadata_serialized = cast(
         Any, _serialize_model(payload.input_metadata_json)
     )
+    db.add(run)
+    db.commit()
+    db.refresh(run)
+    return run
+
+
+def apply_sample_chaos_to_run(db: Session, run: Run, sample_key: str) -> Run:
+    """Load one curated sample set into an editable run."""
+    if run.status not in {RunStatus.DRAFT.value, RunStatus.FAILED.value}:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Samples can only be loaded into draft or failed runs.",
+        )
+
+    from app.services.sample_chaos import get_sample_chaos_set
+
+    sample = get_sample_chaos_set(sample_key)
+    run.title = cast(Any, sample.title)
+    run.input_text = cast(Any, "\n".join(sample.notes))
+    run.normalized_input_text = cast(Any, "\n".join(sample.notes))
+    run.input_metadata_serialized = cast(
+        Any,
+        _serialize_model(
+            RunInputMetadata(
+                source_kind=f"sample:{sample.key}",
+                accepted_file_count=0,
+                rejected_file_count=0,
+                warning_count=0,
+            )
+        ),
+    )
+    run.uploaded_files_serialized = cast(Any, None)
+    run.ingestion_summary_serialized = cast(Any, None)
     db.add(run)
     db.commit()
     db.refresh(run)
@@ -161,6 +196,12 @@ def serialize_run(run: Run) -> RunResponse:
             run.post_processor_results_serialized
         ),
         follow_up_count=run.follow_up_count,
+        follow_up_response_json=_deserialize_model(
+            run.follow_up_response_serialized, FollowUpResponse
+        ),
+        notification_preference_json=_deserialize_model(
+            run.notification_preference_serialized, NotificationPreference
+        ),
     )
 
 

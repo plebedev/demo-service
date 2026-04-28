@@ -5,7 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from app.core.security import create_access_token, verify_access_token
-from app.db.models import InvitationCode, InvitationRedemption
+from app.db.models import InvitationCode, InvitationRedemption, InvitationRequest
+
+
 @dataclass(frozen=True)
 class TokenTestSettings:
     """Small settings stub for token helper unit tests."""
@@ -121,6 +123,46 @@ def test_redeeming_code_increments_usage_and_creates_redemption(
     assert invitation_code.last_used_at is not None
     assert redemption.user_agent == "pytest-agent"
     assert redemption.ip_hash is not None
+
+
+def test_invite_request_submission_persists_for_manual_review(
+    client, db_session
+) -> None:
+    response = client.post(
+        "/api/access/invite-requests",
+        json={
+            "name": "Ada Lovelace",
+            "email": "ADA@Example.COM",
+            "reason": "I want to evaluate the bounded messy-notes workflow.",
+        },
+        headers={"User-Agent": "pytest"},
+    )
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["status"] == "submitted"
+    assert payload["message"] == "Invite request received for manual review."
+
+    stored = db_session.get(InvitationRequest, payload["id"])
+    assert stored is not None
+    assert stored.name == "Ada Lovelace"
+    assert stored.email == "ada@example.com"
+    assert stored.reason == "I want to evaluate the bounded messy-notes workflow."
+    assert stored.user_agent == "pytest"
+    assert stored.ip_hash is not None
+
+
+def test_invite_request_validates_basic_input(client) -> None:
+    response = client.post(
+        "/api/access/invite-requests",
+        json={
+            "name": "",
+            "email": "not-an-email",
+            "reason": "too short",
+        },
+    )
+
+    assert response.status_code == 422
 
 
 def test_admin_stats_and_list_endpoints(client) -> None:
