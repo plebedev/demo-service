@@ -53,6 +53,7 @@ def database_url(postgres_container: PostgresContainer) -> Iterator[str]:
         "ACCESS_TOKEN_SIGNING_KEY": os.environ.get("ACCESS_TOKEN_SIGNING_KEY"),
         "ACCESS_TOKEN_TTL_SECONDS": os.environ.get("ACCESS_TOKEN_TTL_SECONDS"),
         "ADMIN_API_SECRET": os.environ.get("ADMIN_API_SECRET"),
+        "ENVIRONMENT": os.environ.get("ENVIRONMENT"),
         "OPENAI_API_KEY": os.environ.get("OPENAI_API_KEY"),
         "ANTHROPIC_API_KEY": os.environ.get("ANTHROPIC_API_KEY"),
     }
@@ -61,6 +62,7 @@ def database_url(postgres_container: PostgresContainer) -> Iterator[str]:
     os.environ["ACCESS_TOKEN_SIGNING_KEY"] = "test-signing-key"
     os.environ["ACCESS_TOKEN_TTL_SECONDS"] = "3600"
     os.environ["ADMIN_API_SECRET"] = "test-admin-secret"
+    os.environ["ENVIRONMENT"] = "test"
     os.environ["OPENAI_API_KEY"] = "test-openai-key"
     os.environ["ANTHROPIC_API_KEY"] = "test-anthropic-key"
 
@@ -101,7 +103,9 @@ def session_factory(engine: Engine) -> sessionmaker[Session]:
 
 
 @pytest.fixture(autouse=True)
-def reset_database(session_factory: sessionmaker[Session]) -> Generator[None, None, None]:
+def reset_database(
+    session_factory: sessionmaker[Session],
+) -> Generator[None, None, None]:
     """Truncate mutable tables between tests while preserving migrated schema."""
     session = session_factory()
     try:
@@ -125,7 +129,9 @@ def reset_database(session_factory: sessionmaker[Session]) -> Generator[None, No
 
 
 @pytest.fixture()
-def db_session(session_factory: sessionmaker[Session]) -> Generator[Session, None, None]:
+def db_session(
+    session_factory: sessionmaker[Session],
+) -> Generator[Session, None, None]:
     """Provide a direct database session for assertions inside tests."""
     session = session_factory()
     try:

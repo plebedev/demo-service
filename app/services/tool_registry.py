@@ -10,13 +10,32 @@ from pydantic import BaseModel
 from pydantic_ai import Tool
 
 from app.workflows.tools import (
+    BriefInput,
+    BriefOutput,
+    ContradictionFindingsOutput,
+    DuplicateFindingsOutput,
+    ExtractedItemsOutput,
+    NormalizedInputOutput,
     PersistBriefDraftInput,
     PersistBriefDraftOutput,
+    ReconciliationInput,
     RunContextInput,
     RunContextOutput,
+    SectionsInput,
+    SectionsOutput,
+    SectionsToolInput,
+    TextToolInput,
     WorkflowAgentDeps,
+    extract_action_items,
+    extract_claims,
+    extract_decisions,
+    find_contradictions,
+    find_duplicates,
+    format_brief,
     load_run_context,
+    normalize_input,
     persist_brief_draft,
+    split_into_sections,
 )
 
 
@@ -49,6 +68,13 @@ class ToolRegistryEntry:
             name=self.name,
             description=self.description,
         )
+
+    def execute(self, payload: BaseModel) -> BaseModel:
+        """Execute a deterministic registry tool with typed input/output."""
+        result = self.implementation(payload)
+        if isinstance(result, self.output_model):
+            return result
+        return self.output_model.model_validate(result)
 
 
 class WorkflowToolRegistry:
@@ -83,6 +109,10 @@ class WorkflowToolRegistry:
             lines.append(f"- {tool.name}: {tool.prompt_instructions}")
         return "\n".join(lines)
 
+    def execute(self, name: str, payload: BaseModel) -> BaseModel:
+        """Execute one registered deterministic tool."""
+        return self.get(name).execute(payload)
+
 
 def build_tool_registry() -> WorkflowToolRegistry:
     """Build the workflow tool registry used at startup."""
@@ -111,6 +141,78 @@ def build_tool_registry() -> WorkflowToolRegistry:
                 category=ToolCategory.MUTATIVE,
                 input_model=PersistBriefDraftInput,
                 output_model=PersistBriefDraftOutput,
+            ),
+            ToolRegistryEntry(
+                name="normalize_input",
+                description="Normalize pasted and uploaded note text for workflow processing.",
+                prompt_instructions="Use before extracting findings so later steps see stable text.",
+                implementation=normalize_input,
+                category=ToolCategory.READ_ONLY,
+                input_model=TextToolInput,
+                output_model=NormalizedInputOutput,
+            ),
+            ToolRegistryEntry(
+                name="split_into_sections",
+                description="Split normalized notes into stable sections.",
+                prompt_instructions="Use after normalization before claim, decision, or action extraction.",
+                implementation=split_into_sections,
+                category=ToolCategory.READ_ONLY,
+                input_model=SectionsInput,
+                output_model=SectionsOutput,
+            ),
+            ToolRegistryEntry(
+                name="extract_claims",
+                description="Extract factual claims from note sections.",
+                prompt_instructions="Use for grounded observations, not decisions or action items.",
+                implementation=extract_claims,
+                category=ToolCategory.READ_ONLY,
+                input_model=SectionsToolInput,
+                output_model=ExtractedItemsOutput,
+            ),
+            ToolRegistryEntry(
+                name="extract_decisions",
+                description="Extract explicit decisions from note sections.",
+                prompt_instructions="Use only for notes that look like decisions or approvals.",
+                implementation=extract_decisions,
+                category=ToolCategory.READ_ONLY,
+                input_model=SectionsToolInput,
+                output_model=ExtractedItemsOutput,
+            ),
+            ToolRegistryEntry(
+                name="extract_action_items",
+                description="Extract action items from note sections.",
+                prompt_instructions="Use for todos, asks, owners, and follow-up work.",
+                implementation=extract_action_items,
+                category=ToolCategory.READ_ONLY,
+                input_model=SectionsToolInput,
+                output_model=ExtractedItemsOutput,
+            ),
+            ToolRegistryEntry(
+                name="find_duplicates",
+                description="Find duplicate extracted findings.",
+                prompt_instructions="Use after extraction and before writing the brief.",
+                implementation=find_duplicates,
+                category=ToolCategory.READ_ONLY,
+                input_model=ReconciliationInput,
+                output_model=DuplicateFindingsOutput,
+            ),
+            ToolRegistryEntry(
+                name="find_contradictions",
+                description="Find simple contradictions or tensions in extracted findings.",
+                prompt_instructions="Use after extraction and before writing the brief.",
+                implementation=find_contradictions,
+                category=ToolCategory.READ_ONLY,
+                input_model=ReconciliationInput,
+                output_model=ContradictionFindingsOutput,
+            ),
+            ToolRegistryEntry(
+                name="format_brief",
+                description="Format reconciled findings into a concise structured brief.",
+                prompt_instructions="Use as the final tool before persisting the completed run result.",
+                implementation=format_brief,
+                category=ToolCategory.READ_ONLY,
+                input_model=BriefInput,
+                output_model=BriefOutput,
             ),
         ]
     )

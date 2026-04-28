@@ -157,6 +157,9 @@ def serialize_run(run: Run) -> RunResponse:
             run.ingestion_summary_serialized, RunIngestionSummary
         ),
         output_brief_json=_deserialize_json_object(run.output_brief_serialized),
+        post_processor_results_json=_deserialize_json_object(
+            run.post_processor_results_serialized
+        ),
         follow_up_count=run.follow_up_count,
     )
 

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from app.db.models import Run
+from app.db.models import Run, RunEvent
 
 
 def create_code(client, code: str) -> None:
@@ -143,7 +143,7 @@ def test_update_run_draft(client, db_session) -> None:
     assert stored.input_metadata_serialized.startswith('{"source_kind":"pasted_text"')
 
 
-def test_submit_run_transitions_to_submitted(client, db_session) -> None:
+def test_submit_run_executes_workflow_to_completion(client, db_session) -> None:
     headers = access_headers(client, "runs-submit")
 
     created = client.post(
@@ -169,14 +169,37 @@ def test_submit_run_transitions_to_submitted(client, db_session) -> None:
     )
     assert submitted.status_code == 200
     payload = submitted.json()
-    assert payload["status"] == "submitted"
+    assert payload["status"] == "completed"
     assert payload["submitted_at"] is not None
+    assert payload["completed_at"] is not None
+    assert payload["output_brief_json"]["title"] == "Submitted brief request"
+    assert (
+        payload["post_processor_results_json"]["audit-tool-usage-and-handoffs"][
+            "overall_assessment"
+        ]
+        == "ok"
+    )
 
     stored = db_session.get(Run, run_id)
     assert stored is not None
-    assert stored.status == "submitted"
+    assert stored.status == "completed"
     assert stored.submitted_at is not None
     assert stored.input_metadata_serialized is not None
+    assert stored.output_brief_serialized is not None
+
+    events = (
+        db_session.query(RunEvent)
+        .filter(RunEvent.run_id == run_id)
+        .order_by(RunEvent.id.asc())
+        .all()
+    )
+    event_types = [event.event_type for event in events]
+    assert "run_execution_started" in event_types
+    assert "agent_started" in event_types
+    assert "tool_called" in event_types
+    assert "handoff_occurred" in event_types
+    assert "run_completed" in event_types
+    assert "post_processor_completed" in event_types
 
     conflict = client.post(
         f"/api/runs/{run_id}/submit",
@@ -187,7 +210,9 @@ def test_submit_run_transitions_to_submitted(client, db_session) -> None:
     assert conflict.json()["detail"] == "Only draft or failed runs can be submitted."
 
 
-def test_submit_without_payload_preserves_saved_draft_fields(client, db_session) -> None:
+def test_submit_without_payload_preserves_saved_draft_fields(
+    client, db_session
+) -> None:
     headers = access_headers(client, "runs-submit-preserve")
 
     created = client.post("/api/runs", headers=headers, json={"title": "Draft"})
@@ -215,7 +240,7 @@ def test_submit_without_payload_preserves_saved_draft_fields(client, db_session)
     )
     assert submitted.status_code == 200
     payload = submitted.json()
-    assert payload["status"] == "submitted"
+    assert payload["status"] == "completed"
     assert payload["title"] == "Saved title"
     assert payload["input_text"] == "Saved notes"
     assert payload["uploaded_files_json"][0]["file_name"] == "notes.txt"
@@ -226,6 +251,27 @@ def test_submit_without_payload_preserves_saved_draft_fields(client, db_session)
     assert stored.title == "Saved title"
     assert stored.input_text == "Saved notes"
     assert stored.uploaded_files_serialized is not None
+
+
+def test_run_events_endpoint_requires_access_and_returns_events(client) -> None:
+    headers = access_headers(client, "runs-events")
+    created = client.post(
+        "/api/runs",
+        headers=headers,
+        json={"title": "Events", "input_text": "Need legal follow up"},
+    )
+    run_id = created.json()["id"]
+    submitted = client.post(f"/api/runs/{run_id}/submit", headers=headers)
+    assert submitted.status_code == 200
+
+    unauthenticated = client.get(f"/api/runs/{run_id}/events")
+    assert unauthenticated.status_code == 401
+
+    response = client.get(f"/api/runs/{run_id}/events", headers=headers)
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload[0]["event_type"] == "run_execution_started"
+    assert any(event["event_type"] == "post_processor_completed" for event in payload)
 
 
 def test_ingest_pasted_text(client, db_session) -> None:
@@ -304,9 +350,10 @@ def test_ingest_extractable_pdf(client) -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["uploaded_files_json"][0]["file_name"] == "notes.pdf"
-    assert "Quarterly renewal call notes" in payload["uploaded_files_json"][0][
-        "extracted_text"
-    ]
+    assert (
+        "Quarterly renewal call notes"
+        in payload["uploaded_files_json"][0]["extracted_text"]
+    )
 
 
 def test_ingest_rejects_unsupported_file(client) -> None:
@@ -347,9 +394,9 @@ def test_ingest_rejects_oversized_file(client) -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["ingestion_summary_json"]["counts"]["rejected_files"] == 1
-    assert "size limit" in payload["ingestion_summary_json"]["rejected_files"][0][
-        "reason"
-    ]
+    assert (
+        "size limit" in payload["ingestion_summary_json"]["rejected_files"][0]["reason"]
+    )
 
 
 def test_ingest_enforces_max_files(client) -> None:

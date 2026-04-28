@@ -2,6 +2,10 @@
 
 This repository is the phase-1 backend API for the invite-only demo. It mirrors the frontend repo's no-registry deploy approach: build locally, ship the image and committed source to the VM, import into `k3s`, and deploy with Helm.
 
+The browser-facing demo is deployed at [demo.lebedev.ai](https://demo.lebedev.ai);
+this backend is reached through the frontend/BFF and cluster-internal service
+routing.
+
 ## What is included
 
 - FastAPI app with:
@@ -20,9 +24,10 @@ This repository is the phase-1 backend API for the invite-only demo. It mirrors 
 - persisted `runs` table for the M2 demo shell
 - normalized ingestion storage for M3: raw pasted text, accepted file extracts,
   and summary/warning metadata
-- YAML-backed workflow config loading for M4, including per-agent model/provider,
-  tool access, bounded handoffs, future parallel metadata, and post-processor references
-- `run_events` audit-log scaffolding for future workflow/post-run review
+- YAML-backed workflow config loading, including per-agent model/provider,
+  tool access, bounded handoffs, parallel metadata, and post-processor references
+- bounded M5 runtime execution for `messy-notes-v1`, with structured
+  `run_events`, final brief storage, and post-processor audit results
 - pytest coverage for invite validation, token validation, and protected route access control
   plus demo-run creation, retrieval, editing, submission, and deterministic ingestion coverage
 - Production Dockerfile
@@ -92,11 +97,11 @@ Important variables:
 | `DEFAULT_WORKFLOW_KEY` | Workflow key assigned to newly created runs |
 | `WORKFLOW_CONFIG_DIR` | Directory containing workflow YAML definitions |
 | `POST_PROCESSOR_CONFIG_PATH` | YAML file defining workflow post-processors |
-| `MAX_FILES_PER_RUN` | Phase-1 placeholder limit for files per run |
-| `MAX_FILE_SIZE_BYTES` | Phase-1 placeholder limit for file upload size |
+| `MAX_FILES_PER_RUN` | Phase-1 limit for files per run |
+| `MAX_FILE_SIZE_BYTES` | Phase-1 limit for file upload size |
 | `MAX_EXTRACTED_TEXT_BYTES` | Total extracted-text budget kept from accepted files |
 | `MAX_PASTED_TEXT_BYTES` | Maximum raw pasted text persisted on the run |
-| `MAX_TOTAL_WORKFLOW_TEXT_BYTES` | Maximum normalized text passed to future workflow steps |
+| `MAX_TOTAL_WORKFLOW_TEXT_BYTES` | Maximum normalized text passed to workflow execution |
 | `OPENAI_API_KEY` | API key for workflow agents using OpenAI models |
 | `ANTHROPIC_API_KEY` | API key for workflow agents or post-processors using Anthropic models |
 | `FIREWORKS_API_KEY` | Reserved future provider key for FireworksAI |
@@ -129,11 +134,14 @@ Not supported in phase 1:
 Follow-up constraints:
 
 - one generated brief per run
-- at most one follow-up question after brief generation
-- the follow-up must be about the generated brief
-- after that, the user must start a new run
+- follow-up count is initialized and stored with each run
+- broad follow-up chat is not implemented yet
+- any later follow-up behavior should stay scoped to the generated brief
 
-The backend now publishes these guardrails through the protected status and access-verification responses. The full brief workflow is still intentionally out of scope, and the codebase marks the workflow-enforcement boundary with explicit TODO text rather than faking unfinished behavior.
+The backend publishes these guardrails through the protected status and
+access-verification responses. Submitted runs execute the bounded messy-notes
+workflow, persist a generated brief, store structured run events, and run the
+tool/handoff audit post-processor.
 
 ## M3 ingestion behavior
 
@@ -161,6 +169,30 @@ Trimming is deterministic and intentionally boring:
 
 The backend does not imply that it ranked or fully evaluated dropped notes. If something is too large, the stored warnings say so plainly.
 
+## M5 runtime execution
+
+Submitting a run now executes the configured `messy-notes-v1` workflow
+synchronously:
+
+- `/api/runs/<run_id>/submit` saves the submitted state and runs the workflow
+- `/api/runs/<run_id>/execute` can execute an existing draft/submitted/failed run
+- `/api/runs/<run_id>/events` returns structured execution events
+
+The first runtime path is intentionally bounded: orchestrator, extractor,
+reconciler, and brief writer hand off only through the configured graph.
+Extractor tools run in the one explicit parallel group defined in YAML.
+
+The first post-processor is `audit-tool-usage-and-handoffs`; it reads persisted
+run events and stores a structured audit under `post_processor_results_json`.
+
+Run execution tests are included in the normal backend workflow:
+
+```bash
+task test
+task lint
+task build
+```
+
 ## M4 workflow config
 
 Workflow definitions now live under:
@@ -174,7 +206,7 @@ Startup loads and validates:
 - duplicate agent roles
 - tool references against the registry
 - handoff targets
-- future parallel-peer metadata
+- parallel-peer metadata
 - workflow post-processor references
 
 The initial shipped workflow is `messy-notes-v1`, which configures:
@@ -184,10 +216,7 @@ The initial shipped workflow is `messy-notes-v1`, which configures:
 - `reconciler`
 - `brief_writer`
 
-This milestone does not yet implement the full runtime orchestration engine or
-final post-processor executor. It adds the typed config layer, PydanticAI model
-abstraction, tool registry, and run-event audit scaffolding those later
-milestones will build on.
+The M5 runtime builds on this config instead of introducing a separate planner.
 
 ## Local development
 

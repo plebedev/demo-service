@@ -34,7 +34,7 @@ class Phase1Guardrails(BaseModel):
 
 
 def build_phase1_guardrails(settings: Settings) -> Phase1Guardrails:
-    """Return the phase-1 guardrails visible to the UI and future workflows."""
+    """Return the phase-1 guardrails visible to the UI and workflow runtime."""
     return Phase1Guardrails(
         demo_only=True,
         supported_inputs=[
@@ -64,8 +64,8 @@ def build_phase1_guardrails(settings: Settings) -> Phase1Guardrails:
 
 
 def workflow_guardrail_todo() -> str:
-    """Return the next implementation boundary for future workflow ingestion."""
+    """Return a concise runtime workflow status note."""
     return (
-        "TODO: apply these phase-1 input and follow-up limits at the real workflow "
-        "ingestion and brief-generation endpoints when that flow is implemented."
+        "The messy-notes workflow executes submitted runs with bounded tools, "
+        "structured run events, generated brief storage, and post-run audit output."
     )

@@ -1,7 +1,7 @@
 key: messy-notes-v1
 description: >
   Demo workflow for turning messy notes into a structured brief with bounded
-  agent handoffs and future-ready auditing hooks.
+  agent handoffs, explicit tool use, and auditing hooks.
 starting_agent: orchestrator
 post_processors:
   - audit-tool-usage-and-handoffs
@@ -23,6 +23,7 @@ agents:
     timeout: 30
     tools:
       - load_run_context
+      - normalize_input
     can_handoff_to:
       - extractor
       - reconciler
@@ -38,6 +39,10 @@ agents:
     timeout: 30
     tools:
       - load_run_context
+      - split_into_sections
+      - extract_claims
+      - extract_decisions
+      - extract_action_items
     can_handoff_to:
       - reconciler
     parallel:
@@ -57,6 +62,8 @@ agents:
     timeout: 30
     tools:
       - load_run_context
+      - find_duplicates
+      - find_contradictions
     can_handoff_to:
       - brief_writer
   - role: brief_writer
@@ -70,6 +77,7 @@ agents:
     timeout: 45
     tools:
       - load_run_context
+      - format_brief
       - persist_brief_draft
     can_handoff_to: []
     parallel:

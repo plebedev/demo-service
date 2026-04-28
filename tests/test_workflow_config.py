@@ -3,15 +3,19 @@
 from __future__ import annotations
 
 from pathlib import Path
+import asyncio
 
 import pytest
 
+from sqlalchemy import text
+
 from app.core.config import Settings
-from app.db.models import Run
+from app.db.models import Run, RunEvent
 from app.services.model_factory import build_model_settings, required_api_key_env_var
 from app.services.run_events import record_run_event, serialize_run_event
 from app.services.runs import create_run
 from app.services.tool_registry import build_tool_registry
+from app.services.workflow_executor import WorkflowExecutionError, execute_run_workflow
 from app.schemas.run_events import RunEventPayload
 from app.schemas.runs import RunCreateRequest
 from app.workflows.config_models import (
@@ -25,6 +29,7 @@ from app.workflows.loader import (
     load_workflow_registry,
 )
 from app.models.run_event import RunEventType
+from app.workflows.tools import SectionsInput, TextToolInput
 
 
 def build_settings(
@@ -45,7 +50,9 @@ def build_settings(
             "ANTHROPIC_API_KEY": "test-anthropic-key",
             "WORKFLOW_CONFIG_DIR": str(
                 workflow_dir
-                or Path("/Users/plebedev/github/demo/demo-service/app/resources/workflows")
+                or Path(
+                    "/Users/plebedev/github/demo/demo-service/app/resources/workflows"
+                )
             ),
             "POST_PROCESSOR_CONFIG_PATH": str(
                 post_processors_path
@@ -261,8 +268,99 @@ def test_run_event_persistence_round_trip(db_session) -> None:
     assert serialized.tool_result == {"loaded": True}
 
 
+def test_runtime_tools_execute_through_registry() -> None:
+    registry = build_tool_registry()
+
+    normalized = registry.execute(
+        "normalize_input", TextToolInput(text="  Need legal\n\nDecision approved  ")
+    )
+    sections = registry.execute(
+        "split_into_sections", SectionsInput(text=normalized.text)
+    )
+
+    assert normalized.model_dump()["line_count"] == 2
+    assert len(sections.model_dump()["sections"]) == 2
+
+
+def test_workflow_execution_completes_and_persists_audit(db_session, tmp_path) -> None:
+    settings = build_settings(tmp_path)
+    registry = load_workflow_registry(settings)
+    run = create_run(
+        db_session,
+        RunCreateRequest(
+            title="Runtime run",
+            input_text="Need legal summary\nDecision approved\nBudget risk is real",
+        ),
+    )
+
+    executed = asyncio.run(execute_run_workflow(db_session, run, registry, settings))
+
+    assert executed.status == "completed"
+    assert executed.output_brief_serialized is not None
+    assert executed.post_processor_results_serialized is not None
+    events = db_session.query(Run).filter(Run.id == executed.id).one()
+    assert events.follow_up_count == 0
+
+
+def test_configured_parallel_extraction_events_are_persisted(
+    db_session, tmp_path
+) -> None:
+    settings = build_settings(tmp_path)
+    registry = load_workflow_registry(settings)
+    run = create_run(
+        db_session,
+        RunCreateRequest(
+            title="Parallel run", input_text="Need owner\nDecision approved"
+        ),
+    )
+
+    asyncio.run(execute_run_workflow(db_session, run, registry, settings))
+
+    event_rows = db_session.execute(
+        text(
+            "select tool_name, tool_result_json from run_events where run_id = :run_id"
+        ),
+        {"run_id": run.id},
+    ).all()
+    parallel_results = [
+        row
+        for row in event_rows
+        if row.tool_name
+        in {"extract_claims", "extract_decisions", "extract_action_items"}
+        and row.tool_result_json
+        and "parallel_group" in row.tool_result_json
+    ]
+    assert len(parallel_results) == 3
+
+
+def test_invalid_handoff_fails_run_clearly(db_session, tmp_path) -> None:
+    settings = build_settings(tmp_path)
+    registry = load_workflow_registry(settings)
+    workflow = registry.get_workflow("messy-notes-v1")
+    workflow.agents["extractor"].config.can_handoff_to.clear()
+    run = create_run(
+        db_session,
+        RunCreateRequest(title="Bad handoff", input_text="Need legal summary"),
+    )
+
+    with pytest.raises(WorkflowExecutionError, match="cannot hand off"):
+        asyncio.run(execute_run_workflow(db_session, run, registry, settings))
+
+    db_session.refresh(run)
+    assert run.status == "failed"
+    assert (
+        db_session.query(RunEvent)
+        .filter(RunEvent.run_id == run.id, RunEvent.event_type == "run_failed")
+        .one()
+        .message
+    )
+
+
 def test_startup_load_path_behaves_correctly(tmp_path: Path) -> None:
     settings = build_settings(tmp_path)
     registry = load_workflow_registry(settings)
 
-    assert registry.get_workflow(settings.default_workflow_key).config.key == "messy-notes-v1"
+    assert (
+        registry.get_workflow(settings.default_workflow_key).config.key
+        == "messy-notes-v1"
+    )
