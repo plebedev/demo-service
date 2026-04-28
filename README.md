@@ -2,6 +2,10 @@
 
 This repository is the phase-1 backend API for the invite-only demo. It mirrors the frontend repo's no-registry deploy approach: build locally, ship the image and committed source to the VM, import into `k3s`, and deploy with Helm.
 
+The browser-facing demo is deployed at [demo.lebedev.ai](https://demo.lebedev.ai);
+this backend is reached through the frontend/BFF and cluster-internal service
+routing.
+
 ## What is included
 
 - FastAPI app with:
