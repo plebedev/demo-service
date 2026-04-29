@@ -51,6 +51,8 @@ class Run(Base):
         DateTime(timezone=True), nullable=True
     )
     failed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
+    failure_message: Mapped[str] = mapped_column(Text(), nullable=True)
+    failure_internal_reason: Mapped[str] = mapped_column(Text(), nullable=True)
     input_text: Mapped[str] = mapped_column(Text(), nullable=True)
     normalized_input_text: Mapped[str] = mapped_column(Text(), nullable=True)
     input_metadata_serialized: Mapped[str] = mapped_column(

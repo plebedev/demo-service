@@ -16,6 +16,7 @@ from app.schemas.runs import (
     FollowUpRequest,
     NotificationPreferenceRequest,
     RunCreateRequest,
+    RunExecutionSummary,
     RunListResponse,
     RunResponse,
     SampleChaosApplyRequest,
@@ -41,7 +42,11 @@ from app.services.runs import (
     update_run_draft,
 )
 from app.services.sample_chaos import list_sample_chaos_sets
-from app.services.workflow_executor import execute_run_workflow, get_run_events
+from app.services.workflow_executor import (
+    build_run_execution_summary,
+    execute_run_workflow,
+    get_run_events,
+)
 
 router = APIRouter(
     prefix="/api/runs",
@@ -186,3 +191,13 @@ def list_run_events_route(
     """Return structured execution events for a run."""
     run = get_run_or_404(db, run_id)
     return [serialize_run_event(event) for event in get_run_events(db, run.id)]
+
+
+@router.get("/{run_id}/summary", response_model=RunExecutionSummary)
+def get_run_execution_summary_route(
+    run_id: int,
+    db: Session = Depends(get_db_session),
+) -> RunExecutionSummary:
+    """Return a compact execution summary for demos and debugging."""
+    run = get_run_or_404(db, run_id)
+    return build_run_execution_summary(db, run)

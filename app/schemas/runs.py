@@ -165,6 +165,8 @@ class RunResponse(BaseModel):
     submitted_at: datetime | None
     completed_at: datetime | None
     failed_at: datetime | None
+    failure_message: str | None
+    failure_internal_reason: str | None
     input_text: str | None
     normalized_input_text: str | None
     input_metadata_json: RunInputMetadata | None
@@ -181,3 +183,16 @@ class RunListResponse(BaseModel):
     """Simple list wrapper for newest-first run history."""
 
     runs: list[RunResponse]
+
+
+class RunExecutionSummary(BaseModel):
+    """Concise operator-friendly summary of one run execution."""
+
+    run_id: int
+    status: RunStatus
+    failure_message: str | None
+    phase_summary: list[str]
+    tool_usage_summary: list[str]
+    handoff_summary: list[str]
+    audit_summary: str | None
+    post_processor_summary: list[str]

@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
+
+import pytest
+
+from app.core.config import get_settings
 from app.db.models import Run, RunEvent
+from app.services.workflow_executor import WorkflowExecutionError, execute_run_workflow
 
 
 def create_code(client, code: str) -> None:
@@ -272,6 +278,55 @@ def test_run_events_endpoint_requires_access_and_returns_events(client) -> None:
     payload = response.json()
     assert payload[0]["event_type"] == "run_execution_started"
     assert any(event["event_type"] == "post_processor_completed" for event in payload)
+
+    summary = client.get(f"/api/runs/{run_id}/summary", headers=headers)
+    assert summary.status_code == 200
+    summary_payload = summary.json()
+    assert summary_payload["status"] == "completed"
+    assert "extract_action_items" in " ".join(summary_payload["tool_usage_summary"])
+    assert "orchestrator to extractor" in summary_payload["handoff_summary"]
+    assert summary_payload["audit_summary"] == (
+        "Tool use and handoffs stayed inside the configured workflow."
+    )
+
+
+def test_failed_run_records_user_and_internal_failure_messages(
+    client, db_session
+) -> None:
+    headers = access_headers(client, "runs-failure")
+    created = client.post(
+        "/api/runs",
+        headers=headers,
+        json={"title": "Bad workflow", "input_text": "notes"},
+    )
+    run_id = created.json()["id"]
+    run = db_session.get(Run, run_id)
+    assert run is not None
+    run.workflow_key = "unknown-workflow"
+    db_session.add(run)
+    db_session.commit()
+    db_session.refresh(run)
+
+    with pytest.raises(WorkflowExecutionError):
+        asyncio.run(
+            execute_run_workflow(
+                db_session,
+                run,
+                client.app.state.workflow_registry,
+                get_settings(),
+            )
+        )
+
+    db_session.refresh(run)
+    assert run.status == "failed"
+    assert run.failure_message == "The run failed during bounded workflow execution."
+    assert "unknown-workflow" in (run.failure_internal_reason or "")
+
+    summary = client.get(f"/api/runs/{run_id}/summary", headers=headers)
+    assert summary.status_code == 200
+    assert summary.json()["failure_message"] == (
+        "The run failed during bounded workflow execution."
+    )
 
 
 def test_ingest_pasted_text(client, db_session) -> None:

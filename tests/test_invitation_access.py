@@ -187,6 +187,90 @@ def test_admin_stats_and_list_endpoints(client) -> None:
     assert payload["total_redemptions"] == 0
 
 
+def test_admin_invite_request_review_and_details(client) -> None:
+    submitted = client.post(
+        "/api/access/invite-requests",
+        json={
+            "name": "Grace Hopper",
+            "email": "grace@example.com",
+            "reason": "I want to review the demo workflow for operators.",
+        },
+    )
+    request_id = submitted.json()["id"]
+
+    listing = client.get(
+        "/api/internal/admin/invitations/requests",
+        headers={"X-Admin-Secret": "test-admin-secret"},
+    )
+    assert listing.status_code == 200
+    assert listing.json()[0]["id"] == request_id
+    assert listing.json()[0]["issued_invitation_code_id"] is None
+
+    reviewed = client.post(
+        f"/api/internal/admin/invitations/requests/{request_id}/review",
+        headers={"X-Admin-Secret": "test-admin-secret"},
+        json={"status": "reviewed", "reviewer_note": "Looks relevant."},
+    )
+    assert reviewed.status_code == 200
+    payload = reviewed.json()
+    assert payload["status"] == "reviewed"
+    assert payload["reviewed_at"] is not None
+    assert payload["reviewer_note"] == "Looks relevant."
+
+    detail = client.get(
+        f"/api/internal/admin/invitations/requests/{request_id}",
+        headers={"X-Admin-Secret": "test-admin-secret"},
+    )
+    assert detail.status_code == 200
+    assert detail.json()["email"] == "grace@example.com"
+
+
+def test_issue_invite_code_draft_links_request_and_code(client, db_session) -> None:
+    submitted = client.post(
+        "/api/access/invite-requests",
+        json={
+            "name": "Katherine Johnson",
+            "email": "katherine@example.com",
+            "reason": "I need a practical workflow demo for note cleanup.",
+        },
+    )
+    request_id = submitted.json()["id"]
+
+    issued = client.post(
+        f"/api/internal/admin/invitations/requests/{request_id}/issue-code-draft",
+        headers={"X-Admin-Secret": "test-admin-secret"},
+        json={"code": "linked-code", "reviewer_note": "Approved for demo."},
+    )
+    assert issued.status_code == 201
+    payload = issued.json()
+    assert payload["request"]["status"] == "approved"
+    assert payload["request"]["issued_invitation_code"] == "linked-code"
+    assert payload["invitation_code"]["invitation_request_id"] == request_id
+    assert payload["email_draft"]["to_email"] == "katherine@example.com"
+    assert payload["email_draft"]["send_ready"] is False
+    assert "linked-code" in payload["email_draft"]["text_body"]
+
+    stored = db_session.get(InvitationRequest, request_id)
+    assert stored is not None
+    assert stored.status == "approved"
+    assert stored.invitation_codes[0].code == "linked-code"
+
+    duplicate = client.post(
+        f"/api/internal/admin/invitations/requests/{request_id}/issue-code-draft",
+        headers={"X-Admin-Secret": "test-admin-secret"},
+        json={},
+    )
+    assert duplicate.status_code == 409
+    assert duplicate.json()["detail"] == (
+        "Invite request already has an issued invitation code."
+    )
+
+
+def test_admin_invite_request_paths_require_secret(client) -> None:
+    response = client.get("/api/internal/admin/invitations/requests")
+    assert response.status_code == 401
+
+
 def test_create_access_token_returns_expected_claims() -> None:
     settings = TokenTestSettings()
     token, claims = create_access_token(
