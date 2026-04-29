@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_access_token
 from app.core.config import Settings, get_settings
+from app.core.logging import log_event
 from app.core.phase1 import build_phase1_guardrails
 from app.core.security import AccessTokenClaims
 from app.core.security import create_access_token, hash_ip_address
@@ -23,6 +25,7 @@ from app.schemas.access import (
 )
 
 router = APIRouter(prefix="/api/access", tags=["access"])
+logger = logging.getLogger(__name__)
 
 
 @router.post(
@@ -49,6 +52,12 @@ def create_invite_request(
     db.add(invite_request)
     db.commit()
     db.refresh(invite_request)
+    log_event(
+        logger,
+        "invite_request_submitted",
+        invitation_request_id=invite_request.id,
+        email=invite_request.email,
+    )
     return InviteRequestResponse(
         id=invite_request.id,
         status=invite_request.status,

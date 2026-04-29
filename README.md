@@ -103,6 +103,14 @@ Important variables:
 | `MAX_EXTRACTED_TEXT_BYTES` | Total extracted-text budget kept from accepted files |
 | `MAX_PASTED_TEXT_BYTES` | Maximum raw pasted text persisted on the run |
 | `MAX_TOTAL_WORKFLOW_TEXT_BYTES` | Maximum normalized text passed to workflow execution |
+| `EMAIL_PROVIDER` | Draft email provider mode; `stub` by default, `oci` selects OCI draft scaffolding |
+| `INVITE_EMAIL_FROM` | Future sender address for invite delivery |
+| `INVITE_EMAIL_REPLY_TO` | Future reply-to address for invite delivery |
+| `INVITE_EMAIL_BASE_URL` | Public frontend URL used in generated invite email drafts |
+| `OCI_EMAIL_SMTP_HOST` | Future OCI Email Delivery SMTP host placeholder |
+| `OCI_EMAIL_SMTP_PORT` | Future OCI Email Delivery SMTP port placeholder |
+| `OCI_EMAIL_SMTP_USERNAME` | Future OCI Email Delivery SMTP username placeholder |
+| `OCI_EMAIL_SMTP_PASSWORD` | Future OCI Email Delivery SMTP password placeholder |
 | `OPENAI_API_KEY` | API key for workflow agents using OpenAI models |
 | `ANTHROPIC_API_KEY` | API key for workflow agents or post-processors using Anthropic models |
 | `FIREWORKS_API_KEY` | Reserved future provider key for FireworksAI |
@@ -154,14 +162,17 @@ POST /api/access/invite-requests
 ```
 
 The endpoint stores name, normalized email, short reason, request status, user
-agent, and an IP hash for later manual review. It does not approve access,
-issue invitation codes, send emails, or expose a public admin UI.
+agent, and an IP hash for later manual review. Internal admin endpoints can
+list requests, show details, mark requests reviewed/approved/rejected, and
+create a linked invitation code plus a draft invite email payload. The draft
+path does not send email and does not use an LLM for approval decisions.
 
 ## M6 demo polish APIs
 
 M6 adds protected API support for first-run usability and bounded follow-up:
 
 - `GET /api/runs/samples` returns curated messy-note sample sets
+- `GET /api/runs/<run_id>/summary` returns a compact execution summary for demos
 - `POST /api/runs/<run_id>/sample` loads one sample set into a draft run
 - `POST /api/runs/<run_id>/follow-up` answers exactly one brief-scoped follow-up
 - `POST /api/runs/<run_id>/notification-preference` stores optional SMS preference and a normalized US phone number
@@ -502,5 +513,9 @@ Supported commands:
 - `list`
 - `deactivate <invitation_code_id>`
 - `stats`
+- `requests`
+- `request <invite_request_id>`
+- `review <invite_request_id> [reviewed|approved|rejected] [note]`
+- `issue-draft <invite_request_id> [code] [label] [max_uses] [note]`
 
 It calls the backend internal admin API and never talks directly to the database.

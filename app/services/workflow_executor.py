@@ -5,6 +5,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 import json
+import logging
 from typing import Any, cast
 
 from fastapi import HTTPException, status
@@ -13,9 +14,11 @@ from pydantic_ai.usage import UsageLimits
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
+from app.core.logging import log_event
 from app.models.run import Run, RunStatus
 from app.models.run_event import RunEvent, RunEventType
 from app.schemas.run_events import RunEventPayload
+from app.schemas.runs import RunExecutionSummary
 from app.services.run_events import record_run_event
 from app.workflows.config_models import AgentWorkflowConfig
 from app.workflows.loader import WorkflowRegistry, WorkflowRuntime
@@ -31,6 +34,8 @@ from app.workflows.tools import (
     TextToolInput,
     WorkflowAgentDeps,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class WorkflowExecutionError(RuntimeError):
@@ -54,13 +59,21 @@ async def execute_run_workflow(
             detail="Only draft, submitted, or failed runs can be executed.",
         )
 
-    workflow = registry.get_workflow(run.workflow_key)
     try:
+        workflow = registry.get_workflow(run.workflow_key)
         run.status = RunStatus.PROCESSING.value
         run.failed_at = cast(Any, None)
+        run.failure_message = cast(Any, None)
+        run.failure_internal_reason = cast(Any, None)
         db.add(run)
         db.commit()
         db.refresh(run)
+        log_event(
+            logger,
+            "run_execution_started",
+            run_id=run.id,
+            workflow_key=workflow.config.key,
+        )
         _event(
             db,
             run,
@@ -86,10 +99,18 @@ async def execute_run_workflow(
         )
         _run_post_processors(db, run, workflow, registry)
         db.refresh(run)
+        log_event(
+            logger,
+            "run_execution_completed",
+            run_id=run.id,
+            workflow_key=workflow.config.key,
+        )
         return run
     except Exception as exc:
         run.status = RunStatus.FAILED.value
         run.failed_at = datetime.now(UTC)
+        run.failure_message = "The run failed during bounded workflow execution."
+        run.failure_internal_reason = str(exc)
         db.add(run)
         db.commit()
         db.refresh(run)
@@ -98,7 +119,16 @@ async def execute_run_workflow(
             run,
             RunEventType.RUN_FAILED,
             status=run.status,
-            message=str(exc),
+            message=run.failure_message,
+            tool_result={"internal_reason": str(exc)[:500]},
+        )
+        log_event(
+            logger,
+            "run_execution_failed",
+            level=logging.ERROR,
+            run_id=run.id,
+            workflow_key=run.workflow_key,
+            internal_reason=str(exc),
         )
         if isinstance(exc, HTTPException):
             raise
@@ -245,7 +275,20 @@ def _run_extraction_parallel(
             executor.submit(registry.tool_registry.execute, name, payload)
             for name in tool_names
         ]
-        results = [cast(ExtractedItemsOutput, future.result()) for future in futures]
+        try:
+            results = [
+                cast(ExtractedItemsOutput, future.result()) for future in futures
+            ]
+        except Exception:
+            log_event(
+                logger,
+                "tool_execution_failed",
+                level=logging.ERROR,
+                run_id=run.id,
+                agent_role="extractor",
+                tool_name="parallel_extraction_group",
+            )
+            raise
     for name, result in zip(tool_names, results, strict=True):
         _event(
             db,
@@ -338,7 +381,18 @@ def _tool(
         tool_arguments=_summarize_payload(payload),
         status=RunStatus.PROCESSING.value,
     )
-    result = registry.tool_registry.execute(tool_name, payload)
+    try:
+        result = registry.tool_registry.execute(tool_name, payload)
+    except Exception:
+        log_event(
+            logger,
+            "tool_execution_failed",
+            level=logging.ERROR,
+            run_id=run.id,
+            agent_role=agent_role,
+            tool_name=tool_name,
+        )
+        raise
     _event(
         db,
         run,
@@ -393,7 +447,17 @@ def _run_post_processors(
             message=f"Post-processor {key} started.",
         )
         events = _events_for_run(db, run.id)
-        audit = _audit_tool_usage_and_handoffs(workflow, events)
+        try:
+            audit = _audit_tool_usage_and_handoffs(workflow, events)
+        except Exception:
+            log_event(
+                logger,
+                "post_processor_failed",
+                level=logging.ERROR,
+                run_id=run.id,
+                post_processor_key=key,
+            )
+            raise
         results[key] = {
             "type": processor.type.value,
             "overall_assessment": audit["overall_assessment"],
@@ -531,3 +595,54 @@ def _truncate_value(value: Any) -> Any:
 def get_run_events(db: Session, run_id: int) -> list[RunEvent]:
     """Return stored events for one run in creation order."""
     return _events_for_run(db, run_id)
+
+
+def build_run_execution_summary(db: Session, run: Run) -> RunExecutionSummary:
+    """Return a concise run-event summary for UI and operator debugging."""
+    events = _events_for_run(db, run.id)
+    phase_summary: list[str] = []
+    tool_counts: dict[str, int] = {}
+    handoff_summary: list[str] = []
+    post_processor_summary: list[str] = []
+
+    for event in events:
+        if event.event_type in {
+            RunEventType.RUN_EXECUTION_STARTED.value,
+            RunEventType.RUN_COMPLETED.value,
+            RunEventType.RUN_FAILED.value,
+            RunEventType.AGENT_STARTED.value,
+            RunEventType.AGENT_FINISHED.value,
+        }:
+            label = event.agent_role or event.message or event.event_type
+            phase_summary.append(f"{event.event_type}: {label}")
+        if event.event_type == RunEventType.TOOL_RESULT.value and event.tool_name:
+            tool_counts[event.tool_name] = tool_counts.get(event.tool_name, 0) + 1
+        if event.event_type == RunEventType.HANDOFF_OCCURRED.value:
+            handoff_summary.append(
+                f"{event.handoff_source_role} to {event.handoff_target_role}"
+            )
+        if event.event_type == RunEventType.POST_PROCESSOR_COMPLETED.value:
+            post_processor_summary.append(
+                f"{event.post_processor_key}: {event.message or 'completed'}"
+            )
+
+    audit_summary = None
+    if run.post_processor_results_serialized:
+        results = json.loads(run.post_processor_results_serialized)
+        audit = results.get("audit-tool-usage-and-handoffs")
+        if isinstance(audit, dict):
+            audit_summary = str(audit.get("summary") or "")
+
+    return RunExecutionSummary(
+        run_id=run.id,
+        status=RunStatus(run.status),
+        failure_message=run.failure_message,
+        phase_summary=phase_summary,
+        tool_usage_summary=[
+            f"{tool_name}: {count} result event{'s' if count != 1 else ''}"
+            for tool_name, count in sorted(tool_counts.items())
+        ],
+        handoff_summary=handoff_summary,
+        audit_summary=audit_summary,
+        post_processor_summary=post_processor_summary,
+    )

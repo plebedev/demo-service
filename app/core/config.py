@@ -71,6 +71,22 @@ class Settings(BaseSettings):
     twilio_auth_token: str | None = Field(default=None, alias="TWILIO_AUTH_TOKEN")
     plivo_auth_id: str | None = Field(default=None, alias="PLIVO_AUTH_ID")
     plivo_auth_token: str | None = Field(default=None, alias="PLIVO_AUTH_TOKEN")
+    email_provider: str = Field(default="stub", alias="EMAIL_PROVIDER")
+    invite_email_from: str | None = Field(default=None, alias="INVITE_EMAIL_FROM")
+    invite_email_reply_to: str | None = Field(
+        default=None, alias="INVITE_EMAIL_REPLY_TO"
+    )
+    invite_email_base_url: str = Field(
+        default="https://example.com", alias="INVITE_EMAIL_BASE_URL"
+    )
+    oci_email_smtp_host: str | None = Field(default=None, alias="OCI_EMAIL_SMTP_HOST")
+    oci_email_smtp_port: int = Field(default=587, alias="OCI_EMAIL_SMTP_PORT")
+    oci_email_smtp_username: str | None = Field(
+        default=None, alias="OCI_EMAIL_SMTP_USERNAME"
+    )
+    oci_email_smtp_password: str | None = Field(
+        default=None, alias="OCI_EMAIL_SMTP_PASSWORD"
+    )
     openai_api_key: str | None = Field(default=None, alias="OPENAI_API_KEY")
     anthropic_api_key: str | None = Field(default=None, alias="ANTHROPIC_API_KEY")
     fireworks_api_key: str | None = Field(default=None, alias="FIREWORKS_API_KEY")

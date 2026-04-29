@@ -180,6 +180,8 @@ def serialize_run(run: Run) -> RunResponse:
         submitted_at=run.submitted_at,
         completed_at=run.completed_at,
         failed_at=run.failed_at,
+        failure_message=run.failure_message,
+        failure_internal_reason=run.failure_internal_reason,
         input_text=run.input_text,
         normalized_input_text=run.normalized_input_text,
         input_metadata_json=_deserialize_model(

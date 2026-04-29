@@ -36,9 +36,15 @@ class InvitationCode(Base):
     last_used_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    invitation_request_id: Mapped[int] = mapped_column(
+        ForeignKey("invitation_requests.id"), nullable=True
+    )
 
     redemptions: Mapped[list["InvitationRedemption"]] = relationship(
         back_populates="invitation_code", cascade="all, delete-orphan"
+    )
+    invitation_request: Mapped["InvitationRequest"] = relationship(
+        back_populates="invitation_codes"
     )
 
 
@@ -82,3 +88,11 @@ class InvitationRequest(Base):
     )
     user_agent: Mapped[str] = mapped_column(String(512), nullable=True)
     ip_hash: Mapped[str] = mapped_column(String(64), nullable=True)
+    reviewed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    reviewer_note: Mapped[str] = mapped_column(Text(), nullable=True)
+
+    invitation_codes: Mapped[list[InvitationCode]] = relationship(
+        back_populates="invitation_request"
+    )

@@ -14,5 +14,8 @@ configEnv:
   MAX_FILE_SIZE_BYTES: "5242880"
   MAX_EXTRACTED_TEXT_BYTES: "250000"
   MAX_TOTAL_WORKFLOW_TEXT_BYTES: "400000"
+  EMAIL_PROVIDER: "stub"
+  INVITE_EMAIL_BASE_URL: "https://example.com"
+  OCI_EMAIL_SMTP_PORT: "587"
 
 existingSecretName: "backend-api-secrets"
