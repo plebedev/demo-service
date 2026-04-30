@@ -14,8 +14,10 @@ configEnv:
   MAX_FILE_SIZE_BYTES: "5242880"
   MAX_EXTRACTED_TEXT_BYTES: "250000"
   MAX_TOTAL_WORKFLOW_TEXT_BYTES: "400000"
-  EMAIL_PROVIDER: "stub"
-  INVITE_EMAIL_BASE_URL: "https://example.com"
+  EMAIL_PROVIDER: "oci"
+  INVITE_EMAIL_BASE_URL: "https://demo.lebedev.ai"
+  INVITE_EMAIL_DRAFT_PROVIDER: "openai"
+  INVITE_EMAIL_DRAFT_MODEL: "gpt-5-mini"
   OCI_EMAIL_SMTP_PORT: "587"
 
 existingSecretName: "backend-api-secrets"

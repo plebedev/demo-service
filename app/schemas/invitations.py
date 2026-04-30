@@ -46,6 +46,10 @@ class InvitationRequestResponse(BaseModel):
     created_at: datetime
     reviewed_at: datetime | None
     reviewer_note: str | None
+    fulfillment_status: str
+    fulfilled_at: datetime | None
+    email_sent_at: datetime | None
+    fulfillment_error: str | None
     issued_invitation_code_id: int | None
     issued_invitation_code: str | None
 

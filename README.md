@@ -103,14 +103,19 @@ Important variables:
 | `MAX_EXTRACTED_TEXT_BYTES` | Total extracted-text budget kept from accepted files |
 | `MAX_PASTED_TEXT_BYTES` | Maximum raw pasted text persisted on the run |
 | `MAX_TOTAL_WORKFLOW_TEXT_BYTES` | Maximum normalized text passed to workflow execution |
-| `EMAIL_PROVIDER` | Draft email provider mode; `stub` by default, `oci` selects OCI draft scaffolding |
-| `INVITE_EMAIL_FROM` | Future sender address for invite delivery |
-| `INVITE_EMAIL_REPLY_TO` | Future reply-to address for invite delivery |
-| `INVITE_EMAIL_BASE_URL` | Public frontend URL used in generated invite email drafts |
-| `OCI_EMAIL_SMTP_HOST` | Future OCI Email Delivery SMTP host placeholder |
-| `OCI_EMAIL_SMTP_PORT` | Future OCI Email Delivery SMTP port placeholder |
-| `OCI_EMAIL_SMTP_USERNAME` | Future OCI Email Delivery SMTP username placeholder |
-| `OCI_EMAIL_SMTP_PASSWORD` | Future OCI Email Delivery SMTP password placeholder |
+| `EMAIL_PROVIDER` | Existing draft provider selector for internal draft endpoints |
+| `INVITE_EMAIL_FROM` | Legacy draft sender placeholder |
+| `INVITE_EMAIL_REPLY_TO` | Legacy draft reply-to placeholder |
+| `INVITE_EMAIL_BASE_URL` | Public frontend URL used in invite email copy |
+| `INVITE_EMAIL_DRAFT_PROVIDER` | PydanticAI provider for personalized invite email drafting, default `openai` |
+| `INVITE_EMAIL_DRAFT_MODEL` | Small model used for invite email drafting, default `gpt-5-mini` |
+| `INVITE_EMAIL_BCC_ADDRESS` | Operator address BCC'd on every automatic invite email |
+| `OCI_EMAIL_SMTP_HOST` | OCI Email Delivery SMTP host |
+| `OCI_EMAIL_SMTP_PORT` | OCI Email Delivery SMTP port, usually `587` |
+| `OCI_EMAIL_SMTP_USERNAME` | OCI Email Delivery SMTP username |
+| `OCI_EMAIL_SMTP_PASSWORD` | OCI Email Delivery SMTP password |
+| `OCI_EMAIL_FROM_ADDRESS` | Verified sender address for OCI Email Delivery |
+| `OCI_EMAIL_FROM_NAME` | Display name for automatic invite emails |
 | `OPENAI_API_KEY` | API key for workflow agents using OpenAI models |
 | `ANTHROPIC_API_KEY` | API key for workflow agents or post-processors using Anthropic models |
 | `FIREWORKS_API_KEY` | Reserved future provider key for FireworksAI |
@@ -162,10 +167,17 @@ POST /api/access/invite-requests
 ```
 
 The endpoint stores name, normalized email, short reason, request status, user
-agent, and an IP hash for later manual review. Internal admin endpoints can
-list requests, show details, mark requests reviewed/approved/rejected, and
-create a linked invitation code plus a draft invite email payload. The draft
-path does not send email and does not use an LLM for approval decisions.
+agent, and an IP hash, then queues background fulfillment. The background task
+creates a linked invitation code with `max_uses = 10`, drafts a short
+personalized invite email from the request context with PydanticAI, falls back
+to a deterministic template if drafting fails, and sends through OCI Email
+Delivery SMTP. `INVITE_EMAIL_BCC_ADDRESS` is included as BCC on every automatic
+invite email.
+
+Invite fulfillment records `fulfillment_status`, `fulfilled_at`,
+`email_sent_at`, and `fulfillment_error` on the invite request. If sending
+fails, the request and generated code remain persisted and the failure is
+logged for later retry.
 
 ## M6 demo polish APIs
 
