@@ -77,7 +77,16 @@ class Settings(BaseSettings):
         default=None, alias="INVITE_EMAIL_REPLY_TO"
     )
     invite_email_base_url: str = Field(
-        default="https://example.com", alias="INVITE_EMAIL_BASE_URL"
+        default="https://demo.lebedev.ai", alias="INVITE_EMAIL_BASE_URL"
+    )
+    invite_email_draft_provider: str = Field(
+        default="openai", alias="INVITE_EMAIL_DRAFT_PROVIDER"
+    )
+    invite_email_draft_model: str = Field(
+        default="gpt-5-mini", alias="INVITE_EMAIL_DRAFT_MODEL"
+    )
+    invite_email_bcc_address: str | None = Field(
+        default=None, alias="INVITE_EMAIL_BCC_ADDRESS"
     )
     oci_email_smtp_host: str | None = Field(default=None, alias="OCI_EMAIL_SMTP_HOST")
     oci_email_smtp_port: int = Field(default=587, alias="OCI_EMAIL_SMTP_PORT")
@@ -87,6 +96,10 @@ class Settings(BaseSettings):
     oci_email_smtp_password: str | None = Field(
         default=None, alias="OCI_EMAIL_SMTP_PASSWORD"
     )
+    oci_email_from_address: str | None = Field(
+        default=None, alias="OCI_EMAIL_FROM_ADDRESS"
+    )
+    oci_email_from_name: str | None = Field(default=None, alias="OCI_EMAIL_FROM_NAME")
     openai_api_key: str | None = Field(default=None, alias="OPENAI_API_KEY")
     anthropic_api_key: str | None = Field(default=None, alias="ANTHROPIC_API_KEY")
     fireworks_api_key: str | None = Field(default=None, alias="FIREWORKS_API_KEY")

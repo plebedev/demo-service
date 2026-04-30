@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_access_token
@@ -23,6 +23,7 @@ from app.schemas.access import (
     InviteRequestResponse,
     RedeemInvitationRequest,
 )
+from app.services.invite_fulfillment import fulfill_invite_request
 
 router = APIRouter(prefix="/api/access", tags=["access"])
 logger = logging.getLogger(__name__)
@@ -36,10 +37,11 @@ logger = logging.getLogger(__name__)
 def create_invite_request(
     payload: InviteRequestCreate,
     request: Request,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db_session),
     settings: Settings = Depends(get_settings),
 ) -> InviteRequestResponse:
-    """Persist a public invite request for later manual review."""
+    """Persist a public invite request and enqueue background fulfillment."""
     invite_request = InvitationRequest(
         name=payload.name,
         email=payload.email,
@@ -58,10 +60,11 @@ def create_invite_request(
         invitation_request_id=invite_request.id,
         email=invite_request.email,
     )
+    background_tasks.add_task(fulfill_invite_request, invite_request.id)
     return InviteRequestResponse(
         id=invite_request.id,
         status=invite_request.status,
-        message="Invite request received for manual review.",
+        message="Invite request received. Your invite is being prepared and emailed.",
     )
 
 

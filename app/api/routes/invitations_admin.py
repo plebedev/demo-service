@@ -75,6 +75,10 @@ def _serialize_invitation_request(
         created_at=invite_request.created_at,
         reviewed_at=invite_request.reviewed_at,
         reviewer_note=invite_request.reviewer_note,
+        fulfillment_status=invite_request.fulfillment_status,
+        fulfilled_at=invite_request.fulfilled_at,
+        email_sent_at=invite_request.email_sent_at,
+        fulfillment_error=invite_request.fulfillment_error,
         issued_invitation_code_id=invitation_code.id if invitation_code else None,
         issued_invitation_code=invitation_code.code if invitation_code else None,
     )

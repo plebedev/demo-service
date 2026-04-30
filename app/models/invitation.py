@@ -70,7 +70,7 @@ class InvitationRedemption(Base):
 
 
 class InvitationRequest(Base):
-    """Public request for future invite review."""
+    """Public request for automatic invite fulfillment."""
 
     __tablename__ = "invitation_requests"
 
@@ -92,6 +92,16 @@ class InvitationRequest(Base):
         DateTime(timezone=True), nullable=True
     )
     reviewer_note: Mapped[str] = mapped_column(Text(), nullable=True)
+    fulfillment_status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="pending", server_default="pending"
+    )
+    fulfilled_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    email_sent_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    fulfillment_error: Mapped[str] = mapped_column(Text(), nullable=True)
 
     invitation_codes: Mapped[list[InvitationCode]] = relationship(
         back_populates="invitation_request"
