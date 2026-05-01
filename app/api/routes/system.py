@@ -9,7 +9,7 @@ from app.core.config import get_settings
 from app.core.phase1 import build_phase1_guardrails, workflow_guardrail_todo
 from app.db.models import ExampleRecord
 from app.db.session import get_db_session
-from app.integrations.status import provider_statuses
+from app.integrations.status import feature_statuses, provider_statuses
 from app.schemas.status import ApiStatusResponse, HealthResponse, ReadyResponse
 
 router = APIRouter()
@@ -46,6 +46,7 @@ def api_status(
         database_ready=True,
         example_record_count=example_record_count,
         providers=provider_statuses(settings),
+        features=feature_statuses(settings),
         phase1=build_phase1_guardrails(settings),
         workflow_todo=workflow_guardrail_todo(),
     )

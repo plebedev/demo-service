@@ -21,12 +21,15 @@ from app.schemas.runs import (
     RunResponse,
     SampleChaosApplyRequest,
     SampleChaosListResponse,
+    SmsPhoneStatusRequest,
+    SmsPhoneStatusResponse,
     RunSubmitRequest,
     RunUpdateRequest,
 )
 from app.services.follow_up import answer_follow_up
 from app.services.notifications import (
     capture_notification_preference,
+    get_sms_phone_status,
     maybe_send_completion_notification,
 )
 from app.services.run_events import serialize_run_event
@@ -58,7 +61,7 @@ router = APIRouter(
 @router.get("", response_model=RunListResponse)
 def list_runs_route(db: Session = Depends(get_db_session)) -> RunListResponse:
     """Return newest-first run history for the protected demo shell."""
-    return serialize_run_list(list_runs(db))
+    return serialize_run_list(list_runs(db), db)
 
 
 @router.post("", response_model=RunResponse, status_code=status.HTTP_201_CREATED)
@@ -67,7 +70,7 @@ def create_run_route(
     db: Session = Depends(get_db_session),
 ) -> RunResponse:
     """Create a new draft run."""
-    return serialize_run(create_run(db, payload))
+    return serialize_run(create_run(db, payload), db)
 
 
 @router.get("/samples", response_model=SampleChaosListResponse)
@@ -76,10 +79,19 @@ def list_sample_chaos_route() -> SampleChaosListResponse:
     return SampleChaosListResponse(samples=list_sample_chaos_sets())
 
 
+@router.post("/sms-status", response_model=SmsPhoneStatusResponse)
+def sms_phone_status_route(
+    payload: SmsPhoneStatusRequest,
+    db: Session = Depends(get_db_session),
+) -> SmsPhoneStatusResponse:
+    """Return phone validity and permanent opt-out status for the UI."""
+    return get_sms_phone_status(db, payload.phone_number)
+
+
 @router.get("/{run_id}", response_model=RunResponse)
 def get_run_route(run_id: int, db: Session = Depends(get_db_session)) -> RunResponse:
     """Return one persisted run."""
-    return serialize_run(get_run_or_404(db, run_id))
+    return serialize_run(get_run_or_404(db, run_id), db)
 
 
 @router.put("/{run_id}", response_model=RunResponse)
@@ -90,7 +102,7 @@ def update_run_route(
 ) -> RunResponse:
     """Update the editable draft fields of a run."""
     run = get_run_or_404(db, run_id)
-    return serialize_run(update_run_draft(db, run, payload))
+    return serialize_run(update_run_draft(db, run, payload), db)
 
 
 @router.post("/{run_id}/sample", response_model=RunResponse)
@@ -101,7 +113,7 @@ def apply_sample_chaos_route(
 ) -> RunResponse:
     """Load a curated sample chaos set into a draft run."""
     run = get_run_or_404(db, run_id)
-    return serialize_run(apply_sample_chaos_to_run(db, run, payload.sample_key))
+    return serialize_run(apply_sample_chaos_to_run(db, run, payload.sample_key), db)
 
 
 @router.post("/{run_id}/notification-preference", response_model=RunResponse)
@@ -112,7 +124,7 @@ def notification_preference_route(
 ) -> RunResponse:
     """Capture optional future SMS completion notification preference."""
     run = get_run_or_404(db, run_id)
-    return serialize_run(capture_notification_preference(db, run, payload))
+    return serialize_run(capture_notification_preference(db, run, payload), db)
 
 
 @router.post("/{run_id}/follow-up", response_model=RunResponse)
@@ -123,7 +135,7 @@ def follow_up_route(
 ) -> RunResponse:
     """Answer the one guarded follow-up question for a completed run."""
     run = get_run_or_404(db, run_id)
-    return serialize_run(answer_follow_up(db, run, payload))
+    return serialize_run(answer_follow_up(db, run, payload), db)
 
 
 @router.post("/{run_id}/ingest", response_model=RunResponse)
@@ -143,7 +155,7 @@ async def ingest_run_route(
         pasted_text=input_text,
         files=files,
     )
-    return serialize_run(updated)
+    return serialize_run(updated, db)
 
 
 @router.post("/{run_id}/submit", response_model=RunResponse)
@@ -162,8 +174,8 @@ async def submit_run_route(
         request.app.state.workflow_registry,
         get_settings(),
     )
-    maybe_send_completion_notification(executed)
-    return serialize_run(executed)
+    maybe_send_completion_notification(db, executed, get_settings())
+    return serialize_run(executed, db)
 
 
 @router.post("/{run_id}/execute", response_model=RunResponse)
@@ -180,7 +192,8 @@ async def execute_run_route(
         request.app.state.workflow_registry,
         get_settings(),
     )
-    return serialize_run(executed)
+    maybe_send_completion_notification(db, executed, get_settings())
+    return serialize_run(executed, db)
 
 
 @router.get("/{run_id}/events", response_model=list[RunEventResponse])

@@ -8,6 +8,7 @@ from app.models.invitation import (
 )
 from app.models.run import Run
 from app.models.run_event import RunEvent
+from app.models.sms import SmsConversation, SmsMessage, SmsOptOut
 
 __all__ = [
     "ExampleRecord",
@@ -16,4 +17,7 @@ __all__ = [
     "InvitationRequest",
     "Run",
     "RunEvent",
+    "SmsConversation",
+    "SmsMessage",
+    "SmsOptOut",
 ]

@@ -41,5 +41,6 @@ class ApiStatusResponse(BaseModel):
     database_ready: bool
     example_record_count: int
     providers: ProviderStatuses
+    features: dict[str, bool]
     phase1: Phase1Guardrails
     workflow_todo: str

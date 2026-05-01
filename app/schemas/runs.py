@@ -142,6 +142,7 @@ class NotificationPreference(BaseModel):
 
     wants_sms: bool
     phone_number: str | None = None
+    phone_number_blocked: bool = False
 
 
 class NotificationPreferenceRequest(BaseModel):
@@ -149,6 +150,20 @@ class NotificationPreferenceRequest(BaseModel):
 
     wants_sms: bool
     phone_number: str | None = Field(default=None, max_length=32)
+
+
+class SmsPhoneStatusRequest(BaseModel):
+    """Request body for checking SMS phone status."""
+
+    phone_number: str | None = Field(default=None, max_length=32)
+
+
+class SmsPhoneStatusResponse(BaseModel):
+    """Validation and permanent block-list status for one phone number."""
+
+    valid: bool
+    phone_number: str | None
+    phone_number_blocked: bool
 
 
 class RunResponse(BaseModel):

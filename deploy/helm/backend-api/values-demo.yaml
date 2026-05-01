@@ -19,5 +19,13 @@ configEnv:
   INVITE_EMAIL_DRAFT_PROVIDER: "openai"
   INVITE_EMAIL_DRAFT_MODEL: "gpt-5-mini"
   OCI_EMAIL_SMTP_PORT: "587"
+  SMS_NOTIFICATION_ENABLED: "false"
 
 existingSecretName: "backend-api-secrets"
+
+ingress:
+  enabled: true
+  className: traefik
+  annotations: {}
+  path: /api/webhooks/twilio/sms
+  pathType: Prefix
