@@ -11,7 +11,11 @@ from sqlalchemy import text
 
 from app.core.config import Settings
 from app.db.models import Run, RunEvent
-from app.services.model_factory import build_model_settings, required_api_key_env_var
+from app.services.model_factory import (
+    create_model_settings,
+    create_provider_model_settings,
+    required_api_key_env_var,
+)
 from app.services.run_events import record_run_event, serialize_run_event
 from app.services.runs import create_run
 from app.services.tool_registry import build_tool_registry
@@ -217,12 +221,33 @@ def test_provider_model_config_is_parsed_correctly() -> None:
             "can_handoff_to": [],
         }
     )
-    settings = build_model_settings(config)
+    settings = create_model_settings(config)
 
     assert config.provider == WorkflowProvider.ANTHROPIC
     assert config.model == "claude-3-5-haiku-latest"
     assert settings is not None
+    assert settings["anthropic_cache_instructions"] is True
+    assert settings["anthropic_cache_tool_definitions"] is True
+    assert settings["anthropic_cache_messages"] is True
+    assert settings["temperature"] == 0.2
+    assert settings["max_tokens"] == 800
+    assert settings["timeout"] == 12
     assert required_api_key_env_var(config.provider) == "ANTHROPIC_API_KEY"
+
+
+def test_openai_model_settings_use_generic_provider_settings() -> None:
+    settings = create_provider_model_settings(
+        provider=WorkflowProvider.OPENAI,
+        timeout=30,
+        temperature=0.1,
+        max_tokens=1200,
+    )
+
+    assert settings == {
+        "temperature": 0.1,
+        "max_tokens": 1200,
+        "timeout": 30,
+    }
 
 
 def test_post_processor_config_loads_correctly() -> None:

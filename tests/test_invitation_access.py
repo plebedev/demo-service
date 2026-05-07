@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from app.core.config import get_settings
+from app.core.experiences import ExperienceId
 from app.core.security import create_access_token, verify_access_token
 from app.db.models import InvitationCode, InvitationRedemption, InvitationRequest
 from app.services.email import EmailDraft, EmailSendResult
@@ -61,7 +62,7 @@ def create_code(
     response = client.post(
         "/api/internal/admin/invitations",
         headers={"X-Admin-Secret": "test-admin-secret"},
-        json={"code": code, "max_uses": max_uses},
+        json={"code": code, "label": "messy-notes", "max_uses": max_uses},
     )
     assert response.status_code == 201
     if not is_active:
@@ -173,6 +174,7 @@ def test_invite_request_submission_persists_for_manual_review(
         json={
             "name": "Ada Lovelace",
             "email": "ADA@Example.COM",
+            "experience_id": "messy-notes",
             "reason": "I want to evaluate the bounded messy-notes workflow.",
         },
         headers={"User-Agent": "pytest"},
@@ -189,6 +191,7 @@ def test_invite_request_submission_persists_for_manual_review(
     assert stored is not None
     assert stored.name == "Ada Lovelace"
     assert stored.email == "ada@example.com"
+    assert stored.label == "messy-notes"
     assert stored.reason == "I want to evaluate the bounded messy-notes workflow."
     assert stored.user_agent == "pytest"
     assert stored.ip_hash is not None
@@ -209,6 +212,7 @@ def test_invite_request_submission_triggers_background_fulfillment(
         json={
             "name": "Ada Lovelace",
             "email": "ada@example.com",
+            "experience_id": "messy-notes",
             "reason": "I want to evaluate the bounded messy-notes workflow.",
         },
     )
@@ -263,9 +267,7 @@ def test_fulfillment_creates_linked_code_and_sends_email(
     assert stored.invitation_codes[0].code in sender.sent[0].text_body
 
 
-def test_fulfillment_records_email_send_failure(
-    db_session, session_factory
-) -> None:
+def test_fulfillment_records_email_send_failure(db_session, session_factory) -> None:
     invite_request = InvitationRequest(
         name="Grace Hopper",
         email="grace@example.com",
@@ -374,9 +376,7 @@ def test_fallback_email_includes_invite_code_and_instructions() -> None:
     )
     invitation_code = InvitationCode(id=2, code="demo-fallback", max_uses=10)
 
-    draft = build_fallback_invite_email(
-        invite_request, invitation_code, get_settings()
-    )
+    draft = build_fallback_invite_email(invite_request, invitation_code, get_settings())
 
     assert draft.to_email == "ada@example.com"
     assert "demo-fallback" in draft.text_body
@@ -486,6 +486,7 @@ def test_admin_invite_request_review_and_details(client, monkeypatch) -> None:
         json={
             "name": "Grace Hopper",
             "email": "grace@example.com",
+            "experience_id": "messy-notes",
             "reason": "I want to review the demo workflow for operators.",
         },
     )
@@ -530,6 +531,7 @@ def test_issue_invite_code_draft_links_request_and_code(
         json={
             "name": "Katherine Johnson",
             "email": "katherine@example.com",
+            "experience_id": "messy-notes",
             "reason": "I need a practical workflow demo for note cleanup.",
         },
     )
@@ -576,6 +578,7 @@ def test_create_access_token_returns_expected_claims() -> None:
         settings=settings,
         invitation_code_id=42,
         code="direct-token",
+        experience_id=ExperienceId.MESSY_NOTES,
     )
     verified = verify_access_token(token, settings)
     assert claims.token_id == verified.token_id

@@ -5,7 +5,7 @@ post_processors:
       Future post-run audit that checks tool use and handoffs against the
       configured workflow boundaries.
     provider: anthropic
-    model: claude-3-5-haiku-latest
+    model: claude-haiku-4-5-20251001
     system_prompt: >
       You audit the messy-notes demo workflow after a run finishes. Check
       whether tools were used appropriately, whether handoffs stayed inside the

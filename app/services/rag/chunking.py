@@ -22,7 +22,7 @@ def build_rag_chunks(
 
     chunks: list[PreparedRagChunk] = []
     for section in sections:
-        for text_chunk in _recursive_character_chunks(
+        for text_chunk in split_text_into_chunks(
             section.text,
             chunk_size=chunk_size,
             chunk_overlap=chunk_overlap,
@@ -38,12 +38,20 @@ def build_rag_chunks(
     return chunks
 
 
-def _recursive_character_chunks(
+def split_text_into_chunks(
     value: str,
     *,
     chunk_size: int,
     chunk_overlap: int,
 ) -> list[str]:
+    """Split one text value with stable character limits and boundaries."""
+    if chunk_size < 100:
+        raise ValueError("RAG chunk size must be at least 100 characters.")
+    if chunk_overlap < 0 or chunk_overlap >= chunk_size:
+        raise ValueError(
+            "RAG chunk overlap must be non-negative and smaller than size."
+        )
+
     normalized = normalize_text(value)
     if normalized is None:
         return []

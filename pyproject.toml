@@ -19,12 +19,14 @@ psycopg = { version = "3.3.3", extras = ["binary"] }
 pydantic = "2.12.2"
 pydantic-settings = "2.13.1"
 sqlalchemy = "2.0.39"
-uvicorn = { version = "0.34.0", extras = ["standard"] }
+uvicorn = "^0.46.0"
 starlette = ">=0.48,<0.49"
 pypdf = "5.9.0"
 python-multipart = "0.0.20"
-pydantic-ai = "1.17.0"
 pyyaml = "6.0.3"
+fastmcp = "^3.2.4"
+authlib = "^1.7.2"
+pydantic-ai = {version = "1.91.0", extras = ["anthropic", "openai"]}
 
 [tool.poetry.group.dev.dependencies]
 black = "25.1.0"

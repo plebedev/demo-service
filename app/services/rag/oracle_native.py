@@ -4,14 +4,18 @@ from __future__ import annotations
 
 from typing import Any
 
+import oracledb
 from fastapi import UploadFile
 from sqlalchemy import text
 from sqlalchemy.engine import RowMapping
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
-from app.services.rag.extraction import combine_sections, extract_sections
-from app.services.rag.models import RagDocumentResult, RagSearchResult
+from app.services.rag.models import (
+    PreparedRagDocument,
+    RagDocumentResult,
+    RagSearchResult,
+)
 from app.services.rag.repository import RagDocumentRepository
 
 
@@ -33,25 +37,39 @@ class OracleNativeRagStrategy:
         file: UploadFile | None,
     ) -> RagDocumentResult:
         """Extract text, then chunk and embed inside Oracle."""
-        sections, resolved_source = await extract_sections(
+        prepared = await self.repository.prepare_document(
             input_text=input_text,
             file=file,
-            fallback_source=source,
+            source=source,
+            title=title,
         )
-        document_text = combine_sections(sections)
-        if not document_text:
-            raise ValueError("No extractable text was available for RAG ingestion.")
+        return self.create_document_from_prepared(
+            session,
+            settings=settings,
+            prepared=prepared,
+            labels=labels,
+        )
 
+    def create_document_from_prepared(
+        self,
+        session: Session,
+        *,
+        settings: Settings,
+        prepared: PreparedRagDocument,
+        labels: list[str],
+    ) -> RagDocumentResult:
+        """Chunk and embed an already extracted document inside Oracle."""
         document = self.repository.create_document(
             session,
-            source=resolved_source,
-            title=title,
+            source=prepared.source,
+            title=prepared.title,
             labels=labels,
+            content_sha256=prepared.content_sha256,
         )
         chunk_count = self._insert_oracle_chunks(
             session,
             document_id=document.id,
-            document_text=document_text,
+            document_text=prepared.combined_text,
             settings=settings,
         )
         session.commit()
@@ -124,6 +142,54 @@ class OracleNativeRagStrategy:
         ).mappings()
         return [self._search_result(row) for row in rows]
 
+    def search_persona_documents(
+        self,
+        session: Session,
+        *,
+        settings: Settings,
+        persona_id: int,
+        query: str,
+        limit: int,
+    ) -> list[RagSearchResult]:
+        """Embed the query and search only chunks linked to one persona."""
+        if persona_id < 1:
+            raise ValueError("RAG persona id must be positive.")
+        if not query.strip():
+            raise ValueError("RAG search query cannot be empty.")
+        if limit < 1:
+            raise ValueError("Search limit must be at least 1.")
+
+        model_name = self.repository.oracle_model_name(
+            settings.rag_oracle_embedding_model
+        )
+        sql = text(
+            f"""
+            SELECT
+                c.id AS chunk_id,
+                d.id AS document_id,
+                d.source AS source,
+                d.title AS title,
+                c.chunk_index AS chunk_index,
+                c.chunk_text AS chunk_text,
+                VECTOR_DISTANCE(
+                    c.embedding,
+                    VECTOR_EMBEDDING({model_name} USING :query AS DATA),
+                    COSINE
+                ) AS distance
+            FROM rag_document_chunks c
+            JOIN rag_documents d ON d.id = c.document_id
+            JOIN rag_persona_documents pd ON pd.document_id = d.id
+            WHERE pd.persona_id = :persona_id
+            ORDER BY distance ASC
+            FETCH FIRST :limit ROWS ONLY
+            """
+        )
+        rows = session.execute(
+            sql,
+            {"query": query, "persona_id": persona_id, "limit": limit},
+        ).mappings()
+        return [self._search_result(row) for row in rows]
+
     def _insert_oracle_chunks(
         self,
         session: Session,
@@ -173,11 +239,16 @@ class OracleNativeRagStrategy:
             ) c
             """
         )
+        raw_conn = session.connection().connection.driver_connection
+        if raw_conn is None:
+            raise RuntimeError("Expected an oracledb connection but got None")
+        clob = raw_conn.createlob(oracledb.DB_TYPE_CLOB)
+        clob.write(document_text)
         session.execute(
             sql,
             {
                 "document_id": document_id,
-                "document_text": document_text,
+                "document_text": clob,
             },
         )
         count = session.execute(

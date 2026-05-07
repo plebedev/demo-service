@@ -8,8 +8,9 @@ from fastapi import APIRouter, Depends, File, Form, UploadFile, status
 from fastapi import Request
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_access_token
+from app.api.deps import require_experience_access
 from app.core.config import get_settings
+from app.core.experiences import ExperienceId
 from app.db.session import get_db_session
 from app.schemas.run_events import RunEventResponse
 from app.schemas.runs import (
@@ -54,7 +55,7 @@ from app.services.workflow_executor import (
 router = APIRouter(
     prefix="/api/runs",
     tags=["runs"],
-    dependencies=[Depends(get_current_access_token)],
+    dependencies=[Depends(require_experience_access(ExperienceId.MESSY_NOTES))],
 )
 
 

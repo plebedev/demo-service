@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 import hmac
 
 from fastapi import Depends, Header, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.core.config import Settings, get_settings
+from app.core.experiences import ExperienceId
 from app.core.security import AccessTokenClaims, verify_access_token
 
 bearer_scheme = HTTPBearer(auto_error=False)
@@ -24,6 +26,24 @@ def get_current_access_token(
             detail="Access token required.",
         )
     return verify_access_token(credentials.credentials, settings)
+
+
+def require_experience_access(
+    experience_id: ExperienceId,
+) -> Callable[..., AccessTokenClaims]:
+    """Build a dependency requiring a token scoped to one demo experience."""
+
+    def dependency(
+        claims: AccessTokenClaims = Depends(get_current_access_token),
+    ) -> AccessTokenClaims:
+        if claims.experience_id != experience_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access token is not valid for this experience.",
+            )
+        return claims
+
+    return dependency
 
 
 def require_admin_secret(

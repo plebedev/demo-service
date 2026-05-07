@@ -8,7 +8,11 @@ from fastapi import UploadFile
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
-from app.services.rag.models import RagDocumentResult, RagSearchResult
+from app.services.rag.models import (
+    PreparedRagDocument,
+    RagDocumentResult,
+    RagSearchResult,
+)
 
 
 class RagStrategy(Protocol):
@@ -27,6 +31,16 @@ class RagStrategy(Protocol):
     ) -> RagDocumentResult:
         """Ingest one supported document and persist searchable chunks."""
 
+    def create_document_from_prepared(
+        self,
+        session: Session,
+        *,
+        settings: Settings,
+        prepared: PreparedRagDocument,
+        labels: list[str],
+    ) -> RagDocumentResult:
+        """Persist and embed an already extracted document."""
+
     def search(
         self,
         session: Session,
@@ -37,6 +51,17 @@ class RagStrategy(Protocol):
         limit: int,
     ) -> list[RagSearchResult]:
         """Search chunks within the requested labels."""
+
+    def search_persona_documents(
+        self,
+        session: Session,
+        *,
+        settings: Settings,
+        persona_id: int,
+        query: str,
+        limit: int,
+    ) -> list[RagSearchResult]:
+        """Search chunks linked to one persona."""
 
 
 class RagService:
@@ -67,6 +92,22 @@ class RagService:
             file=file,
         )
 
+    def create_document_from_prepared(
+        self,
+        session: Session,
+        *,
+        settings: Settings,
+        prepared: PreparedRagDocument,
+        labels: list[str],
+    ) -> RagDocumentResult:
+        """Persist and embed an already extracted document."""
+        return self.strategy.create_document_from_prepared(
+            session,
+            settings=settings,
+            prepared=prepared,
+            labels=labels,
+        )
+
     def search(
         self,
         session: Session,
@@ -81,6 +122,24 @@ class RagService:
             session,
             settings=settings,
             labels=labels,
+            query=query,
+            limit=limit,
+        )
+
+    def search_persona_documents(
+        self,
+        session: Session,
+        *,
+        settings: Settings,
+        persona_id: int,
+        query: str,
+        limit: int,
+    ) -> list[RagSearchResult]:
+        """Search chunks linked to one persona."""
+        return self.strategy.search_persona_documents(
+            session,
+            settings=settings,
+            persona_id=persona_id,
             query=query,
             limit=limit,
         )

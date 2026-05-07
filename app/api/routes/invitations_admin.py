@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import require_admin_secret
 from app.core.config import Settings, get_settings
+from app.core.experiences import ExperienceId, parse_experience_id
 from app.core.logging import log_event
 from app.db.models import InvitationCode, InvitationRedemption, InvitationRequest
 from app.db.session import get_db_session
@@ -37,6 +38,13 @@ router = APIRouter(
 )
 
 
+def _optional_experience_id(value: str | None) -> ExperienceId | None:
+    """Convert a nullable stored invitation label into a response experience id."""
+    if value is None:
+        return None
+    return parse_experience_id(value)
+
+
 def _serialize_invitation_code(
     invitation_code: InvitationCode,
 ) -> InvitationCodeResponse:
@@ -44,7 +52,7 @@ def _serialize_invitation_code(
     return InvitationCodeResponse(
         id=invitation_code.id,
         code=invitation_code.code,
-        label=invitation_code.label,
+        label=_optional_experience_id(invitation_code.label),
         is_active=invitation_code.is_active,
         max_uses=invitation_code.max_uses,
         use_count=invitation_code.use_count,
@@ -70,6 +78,7 @@ def _serialize_invitation_request(
         id=invite_request.id,
         name=invite_request.name,
         email=invite_request.email,
+        label=_optional_experience_id(invite_request.label),
         reason=invite_request.reason,
         status=invite_request.status,
         created_at=invite_request.created_at,
@@ -135,7 +144,7 @@ def create_invitation_code(
 
     invitation_code = InvitationCode(
         code=code,
-        label=payload.label,
+        label=payload.label.value,
         max_uses=payload.max_uses,
         is_active=True,
         use_count=0,
@@ -286,7 +295,11 @@ def issue_invite_code_draft(
 
     invitation_code = InvitationCode(
         code=code,
-        label=payload.label or f"Invite request #{invite_request.id}",
+        label=(
+            payload.label.value
+            if payload.label
+            else invite_request.label or ExperienceId.MESSY_NOTES.value
+        ),
         max_uses=payload.max_uses,
         is_active=True,
         use_count=0,

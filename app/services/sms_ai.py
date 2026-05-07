@@ -27,7 +27,7 @@ async def classify_opt_out_with_llm(
     message_body: str, settings: Settings
 ) -> OptOutClassification:
     """Classify whether an inbound message asks to stop future SMS."""
-    from app.services.model_factory import create_model
+    from app.services.model_factory import create_model, create_provider_model_settings
     from app.workflows.config_models import WorkflowProvider
 
     provider = WorkflowProvider(settings.sms_reply_provider)
@@ -40,7 +40,12 @@ async def classify_opt_out_with_llm(
             "true when the sender clearly wants future SMS stopped."
         ),
         output_type=OptOutClassification,
-        model_settings={"temperature": 0, "max_tokens": 120},
+        model_settings=create_provider_model_settings(
+            provider=provider,
+            timeout=None,
+            temperature=0,
+            max_tokens=120,
+        ),
     )
     result = await agent.run(
         message_body,
@@ -56,7 +61,7 @@ async def generate_sms_reply_with_llm(
     settings: Settings,
 ) -> str:
     """Generate one concise SMS reply grounded in the completed run context."""
-    from app.services.model_factory import create_model
+    from app.services.model_factory import create_model, create_provider_model_settings
     from app.workflows.config_models import WorkflowProvider
 
     provider = WorkflowProvider(settings.sms_reply_provider)
@@ -70,7 +75,12 @@ async def generate_sms_reply_with_llm(
             "chat. If unsure, ask them to return to the app."
         ),
         output_type=SmsReply,
-        model_settings={"temperature": 0.3, "max_tokens": 120},
+        model_settings=create_provider_model_settings(
+            provider=provider,
+            timeout=None,
+            temperature=0.3,
+            max_tokens=120,
+        ),
     )
     context = (
         f"Run title: {run.title or 'Untitled run'}\n"
