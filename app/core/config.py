@@ -78,8 +78,8 @@ class Settings(BaseSettings):
     rag_oracle_embedding_model: str = Field(
         default="MINILM_L12_V2", alias="RAG_ORACLE_EMBEDDING_MODEL"
     )
-    rag_chunk_size: int = Field(default=800, alias="RAG_CHUNK_SIZE")
-    rag_chunk_overlap: int = Field(default=80, alias="RAG_CHUNK_OVERLAP")
+    rag_chunk_size: int = Field(default=600, alias="RAG_CHUNK_SIZE")
+    rag_chunk_overlap: int = Field(default=60, alias="RAG_CHUNK_OVERLAP")
 
     twilio_account_sid: str | None = Field(default=None, alias="TWILIO_ACCOUNT_SID")
     twilio_auth_token: str | None = Field(default=None, alias="TWILIO_AUTH_TOKEN")

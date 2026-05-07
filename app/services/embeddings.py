@@ -39,6 +39,10 @@ class OllamaEmbeddingProvider:
         try:
             with request.urlopen(http_request, timeout=120) as response:
                 raw_response = response.read()
+        except error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace").strip()
+            message = detail or exc.reason
+            raise RuntimeError(f"Ollama embedding request failed: {message}") from exc
         except error.URLError as exc:
             raise RuntimeError(
                 f"Could not reach Ollama embedding service at {self.base_url}."

@@ -37,6 +37,16 @@ class BadEmbeddingProvider:
         return [[0.0, 1.0] for _ in texts]
 
 
+class LengthLimitedEmbeddingProvider(FakeEmbeddingProvider):
+    """Embedding provider that rejects oversized inputs like small local models."""
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        for text_value in texts:
+            if len(text_value) > 320:
+                raise RuntimeError("the input length exceeds the context length")
+        return super().embed(texts)
+
+
 def test_pgvector_extension_and_rag_tables_are_migrated(db_session) -> None:
     extension = db_session.execute(
         text("SELECT extname FROM pg_extension WHERE extname = 'vector'")
@@ -131,3 +141,26 @@ def test_local_strategy_rejects_wrong_embedding_dimensions(db_session) -> None:
                 file=None,
             )
         )
+
+
+def test_local_strategy_splits_embedding_chunks_that_exceed_context(
+    db_session,
+) -> None:
+    strategy = LocalPostgresRagStrategy(embeddings=LengthLimitedEmbeddingProvider())
+    settings = get_settings().model_copy(
+        update={"rag_chunk_size": 600, "rag_chunk_overlap": 60}
+    )
+
+    result = asyncio.run(
+        strategy.ingest_document(
+            db_session,
+            settings=settings,
+            source="long-url.txt",
+            title=None,
+            labels=["flow-a"],
+            input_text=("https://example.test/" + ("alpha" * 140)),
+            file=None,
+        )
+    )
+
+    assert result.chunk_count > 1

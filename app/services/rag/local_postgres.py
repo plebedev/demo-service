@@ -11,10 +11,11 @@ from sqlalchemy.orm import Session
 
 from app.core.config import Settings
 from app.services.embeddings import EmbeddingProvider
-from app.services.rag.chunking import build_rag_chunks
+from app.services.rag.chunking import build_rag_chunks, split_text_into_chunks
 from app.services.rag.models import (
     EMBEDDING_DIMENSIONS,
     PreparedRagDocument,
+    PreparedRagChunk,
     RagDocumentResult,
     RagSearchResult,
     RagVectorChunk,
@@ -76,17 +77,7 @@ class LocalPostgresRagStrategy:
         if not prepared_chunks:
             raise ValueError("No extractable text was available for RAG ingestion.")
 
-        embeddings = self.embeddings.embed([chunk.text for chunk in prepared_chunks])
-        chunks = [
-            RagVectorChunk(
-                chunk_text=chunk.text,
-                embedding=embedding,
-                chunk_index=chunk.chunk_index,
-                page_number=chunk.page_number,
-                source_location=chunk.source_location,
-            )
-            for chunk, embedding in zip(prepared_chunks, embeddings)
-        ]
+        chunks = self._embed_prepared_chunks(prepared_chunks, settings=settings)
         for chunk in chunks:
             self._validate_vector_chunk(chunk)
 
@@ -108,6 +99,77 @@ class LocalPostgresRagStrategy:
             labels=[label.label_key for label in document.labels],
             chunk_count=len(chunks),
         )
+
+    def _embed_prepared_chunks(
+        self,
+        prepared_chunks: list[PreparedRagChunk],
+        *,
+        settings: Settings,
+    ) -> list[RagVectorChunk]:
+        """Embed chunks one at a time, splitting only chunks that exceed context."""
+        chunks: list[RagVectorChunk] = []
+        pending = list(prepared_chunks)
+        while pending:
+            chunk = pending.pop(0)
+            try:
+                embeddings = self.embeddings.embed([chunk.text])
+            except RuntimeError as exc:
+                if self._should_split_embedding_input(exc, chunk.text):
+                    pending = [
+                        *self._split_prepared_chunk_for_retry(chunk, settings=settings),
+                        *pending,
+                    ]
+                    continue
+                raise
+            if len(embeddings) != 1:
+                raise RuntimeError(
+                    "Embedding provider returned an unexpected number of vectors."
+                )
+            chunks.append(
+                RagVectorChunk(
+                    chunk_text=chunk.text,
+                    embedding=embeddings[0],
+                    chunk_index=len(chunks),
+                    page_number=chunk.page_number,
+                    source_location=chunk.source_location,
+                )
+            )
+        return chunks
+
+    def _should_split_embedding_input(self, exc: RuntimeError, text: str) -> bool:
+        message = str(exc).lower()
+        if len(text) <= 100:
+            return False
+        return (
+            "context length" in message
+            or "input length" in message
+            or "too long" in message
+        )
+
+    def _split_prepared_chunk_for_retry(
+        self,
+        chunk: PreparedRagChunk,
+        *,
+        settings: Settings,
+    ) -> list[PreparedRagChunk]:
+        split_size = max(100, min(settings.rag_chunk_size, len(chunk.text) // 2))
+        split_overlap = min(settings.rag_chunk_overlap, max(0, split_size // 10))
+        text_chunks = split_text_into_chunks(
+            chunk.text,
+            chunk_size=split_size,
+            chunk_overlap=split_overlap,
+        )
+        if len(text_chunks) <= 1:
+            raise RuntimeError("RAG chunk exceeded embedding context length.")
+        return [
+            PreparedRagChunk(
+                text=text_chunk,
+                chunk_index=chunk.chunk_index,
+                page_number=chunk.page_number,
+                source_location=chunk.source_location,
+            )
+            for text_chunk in text_chunks
+        ]
 
     def search(
         self,
