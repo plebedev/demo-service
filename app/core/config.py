@@ -80,6 +80,12 @@ class Settings(BaseSettings):
     )
     rag_chunk_size: int = Field(default=600, alias="RAG_CHUNK_SIZE")
     rag_chunk_overlap: int = Field(default=60, alias="RAG_CHUNK_OVERLAP")
+    rag_chat_provider: str = Field(default="anthropic", alias="RAG_CHAT_PROVIDER")
+    rag_chat_model: str = Field(
+        default="claude-haiku-4-5-20251001", alias="RAG_CHAT_MODEL"
+    )
+    rag_chat_temperature: float = Field(default=0.2, alias="RAG_CHAT_TEMPERATURE")
+    rag_chat_max_tokens: int = Field(default=4096, alias="RAG_CHAT_MAX_TOKENS")
 
     twilio_account_sid: str | None = Field(default=None, alias="TWILIO_ACCOUNT_SID")
     twilio_auth_token: str | None = Field(default=None, alias="TWILIO_AUTH_TOKEN")

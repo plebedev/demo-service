@@ -121,6 +121,20 @@ class RagMessageResponse(BaseModel):
     created_at: datetime
 
 
+class RagMessageCitationResponse(BaseModel):
+    """Citation attached to an assistant RAG message."""
+
+    id: int
+    message_id: int
+    document_id: int
+    chunk_id: int
+    chunk_index: int
+    source: str
+    title: str | None
+    snippet: str
+    rank: int
+
+
 class RagConversationResponse(BaseModel):
     """Serialized RAG conversation summary."""
 
@@ -144,3 +158,18 @@ class RagConversationDetailResponse(BaseModel):
 
     conversation: RagConversationResponse
     messages: list[RagMessageResponse]
+
+
+class RagConversationMessageRequest(BaseModel):
+    """Payload for sending one user message to a RAG conversation."""
+
+    content: str = Field(min_length=1, max_length=8000)
+
+
+class RagConversationMessageResponse(BaseModel):
+    """Response returned after one RAG chat turn."""
+
+    user_message: RagMessageResponse
+    assistant_message: RagMessageResponse
+    citations: list[RagMessageCitationResponse]
+    turns_remaining: int

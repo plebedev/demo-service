@@ -18,15 +18,19 @@ from app.models.rag import (
     RagConversation,
     RagDocument,
     RagMessage,
+    RagMessageCitation,
     RagPersona,
     RagPersonaDocument,
 )
 from app.schemas.rag import (
+    RagConversationMessageRequest,
+    RagConversationMessageResponse,
     RagConversationCreateRequest,
     RagConversationDetailResponse,
     RagConversationListResponse,
     RagConversationResponse,
     RagDocumentIngestResponse,
+    RagMessageCitationResponse,
     RagMessageResponse,
     RagPersonaDocumentIngestResponse,
     RagPersonaDocumentListResponse,
@@ -40,6 +44,8 @@ from app.schemas.rag import (
     RagSearchResultResponse,
 )
 from app.services.rag.factory import build_rag_service
+from app.services.rag.chat import RagAssistantDraft, RagChatService, RagTurnPlan
+from app.services.rag.models import RagSearchResult
 from app.services.rag.repository import RagDocumentRepository
 from app.services.rag.strategy import RagService
 
@@ -58,6 +64,11 @@ def get_rag_service(
 ) -> RagService:
     """Build the request-scoped RAG service for the active backend."""
     return build_rag_service(db, settings)
+
+
+def get_rag_chat_service() -> RagChatService:
+    """Build the request-scoped RAG chat service."""
+    return RagChatService()
 
 
 def _normalize_persona_name(name: str) -> str:
@@ -112,6 +123,21 @@ def _serialize_message(message: RagMessage) -> RagMessageResponse:
         turn_index=message.turn_index,
         metadata=message.metadata_serialized,
         created_at=message.created_at,
+    )
+
+
+def _serialize_citation(citation: RagMessageCitation) -> RagMessageCitationResponse:
+    """Convert a stored RAG citation into API shape."""
+    return RagMessageCitationResponse(
+        id=citation.id,
+        message_id=citation.message_id,
+        document_id=citation.document_id,
+        chunk_id=citation.chunk_id,
+        chunk_index=citation.chunk_index,
+        source=citation.source,
+        title=citation.title,
+        snippet=citation.snippet,
+        rank=citation.rank,
     )
 
 
@@ -172,6 +198,41 @@ def _get_conversation_or_404(
             detail="Conversation not found.",
         )
     return conversation
+
+
+def _next_message_index(db: Session, conversation_id: int) -> int:
+    """Return the next turn index for a conversation."""
+    current = db.scalar(
+        select(func.max(RagMessage.turn_index)).where(
+            RagMessage.conversation_id == conversation_id
+        )
+    )
+    return int(current) + 1 if current is not None else 0
+
+
+def _user_turn_count(db: Session, conversation_id: int) -> int:
+    """Return the number of user turns already stored."""
+    return int(
+        db.scalar(
+            select(func.count(RagMessage.id)).where(
+                RagMessage.conversation_id == conversation_id,
+                RagMessage.role == "user",
+            )
+        )
+        or 0
+    )
+
+
+def _message_metadata(value: dict[str, Any]) -> str:
+    """Serialize message metadata into Oracle-compatible text."""
+    serialized = rag_repository.serialize_json(value)
+    return serialized or "{}"
+
+
+def _citation_snippet(text: str) -> str:
+    """Return a compact citation snippet."""
+    normalized = " ".join(text.split())
+    return normalized[:600]
 
 
 def _ensure_persona_name_available(
@@ -386,6 +447,231 @@ def get_rag_conversation_route(
         conversation=_serialize_conversation(conversation),
         messages=[_serialize_message(message) for message in messages],
     )
+
+
+@router.post(
+    "/conversations/{conversation_id}/messages",
+    response_model=RagConversationMessageResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_rag_conversation_message_route(
+    conversation_id: int,
+    payload: RagConversationMessageRequest,
+    claims: AccessTokenClaims = Depends(rag_access),
+    db: Session = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
+    rag: RagService = Depends(get_rag_service),
+    chat: RagChatService = Depends(get_rag_chat_service),
+) -> RagConversationMessageResponse:
+    """Run one bounded RAG chat turn for a tenant-scoped conversation."""
+    conversation = _get_conversation_or_404(
+        db,
+        conversation_id=conversation_id,
+        invitation_code_id=claims.invitation_code_id,
+    )
+    if conversation.status != "active":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Conversation is not active.",
+        )
+    if conversation.persona_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Conversation persona is no longer available.",
+        )
+    persona = _get_active_persona_or_404(
+        db,
+        persona_id=conversation.persona_id,
+        invitation_code_id=claims.invitation_code_id,
+    )
+    existing_user_turns = _user_turn_count(db, conversation.id)
+    if existing_user_turns >= 10:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="RAG conversations are limited to 10 user turns.",
+        )
+
+    user_content = payload.content.strip()
+    if not user_content:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Message content cannot be empty.",
+        )
+    recent_messages = db.scalars(
+        select(RagMessage)
+        .where(RagMessage.conversation_id == conversation.id)
+        .order_by(RagMessage.turn_index.desc(), RagMessage.id.desc())
+        .limit(8)
+    ).all()
+    recent_messages = list(reversed(recent_messages))
+
+    plan = await chat.plan_turn(
+        settings=settings,
+        persona=persona,
+        recent_messages=recent_messages,
+        user_content=user_content,
+    )
+    retrieved_chunks = _retrieve_for_plan(
+        db,
+        settings=settings,
+        rag=rag,
+        persona_id=persona.id,
+        plan=plan,
+        user_content=user_content,
+    )
+    draft = await _draft_assistant_response(
+        settings=settings,
+        chat=chat,
+        persona=persona,
+        recent_messages=recent_messages,
+        user_content=user_content,
+        plan=plan,
+        retrieved_chunks=retrieved_chunks,
+    )
+
+    next_index = _next_message_index(db, conversation.id)
+    user_message = RagMessage(
+        conversation_id=conversation.id,
+        role="user",
+        content=user_content,
+        turn_index=next_index,
+        metadata_serialized=None,
+    )
+    assistant_message = RagMessage(
+        conversation_id=conversation.id,
+        role="assistant",
+        content=draft.content_markdown,
+        turn_index=next_index + 1,
+        metadata_serialized=_message_metadata(
+            {
+                "plan": plan.model_dump(),
+                "retrieved_chunk_ids": [chunk.chunk_id for chunk in retrieved_chunks],
+            }
+        ),
+    )
+    db.add(user_message)
+    db.add(assistant_message)
+    db.flush()
+
+    citations = _store_citations(
+        db,
+        assistant_message=assistant_message,
+        draft=draft,
+        retrieved_chunks=retrieved_chunks,
+    )
+    db.add(conversation)
+    db.commit()
+    db.refresh(user_message)
+    db.refresh(assistant_message)
+    for citation in citations:
+        db.refresh(citation)
+
+    return RagConversationMessageResponse(
+        user_message=_serialize_message(user_message),
+        assistant_message=_serialize_message(assistant_message),
+        citations=[_serialize_citation(citation) for citation in citations],
+        turns_remaining=max(0, 10 - existing_user_turns - 1),
+    )
+
+
+def _retrieve_for_plan(
+    db: Session,
+    *,
+    settings: Settings,
+    rag: RagService,
+    persona_id: int,
+    plan: RagTurnPlan,
+    user_content: str,
+) -> list[RagSearchResult]:
+    """Retrieve persona-scoped chunks for an allowed turn plan."""
+    if not plan.is_allowed or not plan.needs_retrieval:
+        return []
+    queries = [query.strip() for query in plan.search_queries if query.strip()]
+    if not queries:
+        queries = [user_content]
+
+    results: list[RagSearchResult] = []
+    seen_chunk_ids: set[int] = set()
+    for query in queries[:3]:
+        for result in rag.search_persona_documents(
+            db,
+            settings=settings,
+            persona_id=persona_id,
+            query=query,
+            limit=5,
+        ):
+            if result.chunk_id in seen_chunk_ids:
+                continue
+            results.append(result)
+            seen_chunk_ids.add(result.chunk_id)
+            if len(results) >= 5:
+                return results
+    return results
+
+
+async def _draft_assistant_response(
+    *,
+    settings: Settings,
+    chat: RagChatService,
+    persona: RagPersona,
+    recent_messages: list[RagMessage],
+    user_content: str,
+    plan: RagTurnPlan,
+    retrieved_chunks: list[RagSearchResult],
+) -> RagAssistantDraft:
+    """Return either an off-topic refusal or a grounded assistant draft."""
+    if not plan.is_allowed:
+        return RagAssistantDraft(
+            content_markdown=(
+                plan.user_facing_refusal
+                or "I can only help with questions that fit this persona."
+            ),
+            citation_chunk_ids=[],
+        )
+    return await chat.draft_answer(
+        settings=settings,
+        persona=persona,
+        recent_messages=recent_messages,
+        user_content=user_content,
+        retrieved_chunks=retrieved_chunks,
+    )
+
+
+def _store_citations(
+    db: Session,
+    *,
+    assistant_message: RagMessage,
+    draft: RagAssistantDraft,
+    retrieved_chunks: list[RagSearchResult],
+) -> list[RagMessageCitation]:
+    """Persist citations selected by the assistant draft."""
+    if not retrieved_chunks:
+        return []
+
+    chunk_by_id = {chunk.chunk_id: chunk for chunk in retrieved_chunks}
+    selected_ids = [
+        chunk_id for chunk_id in draft.citation_chunk_ids if chunk_id in chunk_by_id
+    ]
+    if not selected_ids and draft.content_markdown.strip():
+        selected_ids = [chunk.chunk_id for chunk in retrieved_chunks]
+
+    citations: list[RagMessageCitation] = []
+    for rank, chunk_id in enumerate(selected_ids[:5], start=1):
+        chunk = chunk_by_id[chunk_id]
+        citation = RagMessageCitation(
+            message_id=assistant_message.id,
+            document_id=chunk.document_id,
+            chunk_id=chunk.chunk_id,
+            chunk_index=chunk.chunk_index,
+            source=chunk.source,
+            title=chunk.title,
+            snippet=_citation_snippet(chunk.chunk_text),
+            rank=rank,
+        )
+        db.add(citation)
+        citations.append(citation)
+    db.flush()
+    return citations
 
 
 @router.get(

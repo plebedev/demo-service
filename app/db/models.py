@@ -13,6 +13,7 @@ from app.models.rag import (
     RagDocumentLabel,
     RagLabel,
     RagMessage,
+    RagMessageCitation,
     RagPersona,
     RagPersonaDocument,
 )
@@ -31,6 +32,7 @@ __all__ = [
     "RagLabel",
     "RagConversation",
     "RagMessage",
+    "RagMessageCitation",
     "RagPersona",
     "RagPersonaDocument",
     "Run",

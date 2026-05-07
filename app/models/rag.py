@@ -219,6 +219,42 @@ class RagMessage(Base):
     )
 
     conversation: Mapped[RagConversation] = relationship(back_populates="messages")
+    citations: Mapped[list["RagMessageCitation"]] = relationship(
+        back_populates="message", cascade="all, delete-orphan"
+    )
+
+
+class RagMessageCitation(Base):
+    """Citation linking an assistant message to a retrieved source chunk."""
+
+    __tablename__ = "rag_message_citations"
+
+    id: Mapped[int] = mapped_column(
+        Integer, Identity(), primary_key=True, autoincrement=True
+    )
+    message_id: Mapped[int] = mapped_column(
+        ForeignKey("rag_messages.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    document_id: Mapped[int] = mapped_column(
+        ForeignKey("rag_documents.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    chunk_id: Mapped[int] = mapped_column(
+        ForeignKey("rag_document_chunks.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    source: Mapped[str] = mapped_column(String(512), nullable=False)
+    title: Mapped[str] = mapped_column(String(255), nullable=True)
+    snippet: Mapped[str] = mapped_column(Text(), nullable=False)
+    rank: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    message: Mapped[RagMessage] = relationship(back_populates="citations")
+    document: Mapped[RagDocument] = relationship()
+    chunk: Mapped["RagDocumentChunk"] = relationship()
 
 
 class RagDocumentChunk(Base):

@@ -5,7 +5,8 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import UploadFile
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
+from sqlalchemy.dialects.oracle import CLOB
 from sqlalchemy.engine import RowMapping
 from sqlalchemy.orm import Session
 
@@ -237,7 +238,7 @@ class OracleNativeRagStrategy:
                 NORMALIZE ALL
             ) c
             """
-        )
+        ).bindparams(bindparam("document_text", type_=CLOB()))
         session.execute(
             sql,
             {

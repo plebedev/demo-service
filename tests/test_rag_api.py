@@ -2,9 +2,16 @@
 
 from __future__ import annotations
 
-from app.api.routes.rag import get_rag_service
+from app.api.routes.rag import get_rag_chat_service, get_rag_service
 from app.core.config import get_settings
-from app.models.rag import RagDocument, RagDocumentChunk, RagPersonaDocument
+from app.models.rag import (
+    RagDocument,
+    RagDocumentChunk,
+    RagMessage,
+    RagMessageCitation,
+    RagPersonaDocument,
+)
+from app.services.rag.chat import RagAssistantDraft, RagTurnPlan
 from app.services.rag.local_postgres import LocalPostgresRagStrategy
 from app.services.rag.models import EMBEDDING_DIMENSIONS
 from app.services.rag.strategy import RagService
@@ -23,6 +30,53 @@ class FakeEmbeddingProvider:
         else:
             embedding[0] = 1.0
         return embedding
+
+
+class FakeRagChatService:
+    """Deterministic chat planner and answer drafter for endpoint tests."""
+
+    def __init__(self, *, allowed: bool = True) -> None:
+        self.allowed = allowed
+
+    async def plan_turn(
+        self,
+        *,
+        settings,
+        persona,
+        recent_messages,
+        user_content: str,
+    ) -> RagTurnPlan:
+        del settings, persona, recent_messages
+        if not self.allowed or "off topic" in user_content.lower():
+            return RagTurnPlan(
+                is_allowed=False,
+                refusal_reason="outside persona scope",
+                user_facing_refusal="I can help with policy questions for this persona.",
+                needs_retrieval=False,
+                search_queries=[],
+            )
+        query = "beta pricing question" if "pricing" in user_content.lower() else user_content
+        return RagTurnPlan(
+            is_allowed=True,
+            needs_retrieval=True,
+            search_queries=[query],
+        )
+
+    async def draft_answer(
+        self,
+        *,
+        settings,
+        persona,
+        recent_messages,
+        user_content: str,
+        retrieved_chunks,
+    ) -> RagAssistantDraft:
+        del settings, persona, recent_messages, user_content
+        citation_ids = [chunk.chunk_id for chunk in retrieved_chunks[:1]]
+        return RagAssistantDraft(
+            content_markdown="Grounded answer from linked documents.",
+            citation_chunk_ids=citation_ids,
+        )
 
 
 def create_code(client, code: str, label: str = "rag-demo") -> None:
@@ -467,6 +521,146 @@ def test_persona_document_search_is_limited_to_linked_documents(
         assert all("beta" in result.chunk_text for result in pricing_results)
     finally:
         client.app.dependency_overrides.pop(get_rag_service, None)
+
+
+def test_rag_chat_message_retrieves_persona_documents_and_stores_citations(
+    client,
+    db_session,
+) -> None:
+    service = RagService(LocalPostgresRagStrategy(embeddings=FakeEmbeddingProvider()))
+    client.app.dependency_overrides[get_rag_service] = lambda: service
+    client.app.dependency_overrides[get_rag_chat_service] = lambda: FakeRagChatService()
+    try:
+        headers = access_headers(client, "rag-chat-message")
+        policy_persona_id = create_persona(client, headers, "Policy Helper")
+        pricing_persona_id = create_persona(client, headers, "Pricing Helper")
+
+        policy_upload = client.post(
+            f"/api/rag/personas/{policy_persona_id}/documents",
+            headers=headers,
+            data={
+                "source": "policy.txt",
+                "title": "Policy",
+                "input_text": "alpha renewal policy context",
+            },
+        )
+        assert policy_upload.status_code == 201
+
+        pricing_upload = client.post(
+            f"/api/rag/personas/{pricing_persona_id}/documents",
+            headers=headers,
+            data={
+                "source": "pricing.txt",
+                "title": "Pricing",
+                "input_text": "beta pricing policy context",
+            },
+        )
+        assert pricing_upload.status_code == 201
+
+        conversation = client.post(
+            "/api/rag/conversations",
+            headers=headers,
+            json={"persona_id": policy_persona_id, "title": "Policy chat"},
+        )
+        assert conversation.status_code == 201
+        conversation_id = conversation.json()["id"]
+
+        response = client.post(
+            f"/api/rag/conversations/{conversation_id}/messages",
+            headers=headers,
+            json={"content": "What does the pricing policy say?"},
+        )
+
+        assert response.status_code == 201
+        payload = response.json()
+        assert payload["user_message"]["role"] == "user"
+        assert payload["assistant_message"]["role"] == "assistant"
+        assert payload["assistant_message"]["content"] == (
+            "Grounded answer from linked documents."
+        )
+        assert payload["turns_remaining"] == 9
+        assert len(payload["citations"]) == 1
+        assert payload["citations"][0]["source"] == "policy.txt"
+        assert "beta" not in payload["citations"][0]["snippet"]
+
+        db_session.expire_all()
+        assert db_session.query(RagMessage).count() == 2
+        assert db_session.query(RagMessageCitation).count() == 1
+    finally:
+        client.app.dependency_overrides.pop(get_rag_chat_service, None)
+        client.app.dependency_overrides.pop(get_rag_service, None)
+
+
+def test_rag_chat_message_declines_off_topic_without_retrieval(
+    client,
+    db_session,
+) -> None:
+    service = RagService(LocalPostgresRagStrategy(embeddings=FakeEmbeddingProvider()))
+    client.app.dependency_overrides[get_rag_service] = lambda: service
+    client.app.dependency_overrides[get_rag_chat_service] = lambda: FakeRagChatService()
+    try:
+        headers = access_headers(client, "rag-chat-off-topic")
+        persona_id = create_persona(client, headers, "Policy Helper")
+        conversation = client.post(
+            "/api/rag/conversations",
+            headers=headers,
+            json={"persona_id": persona_id},
+        )
+        assert conversation.status_code == 201
+
+        response = client.post(
+            f"/api/rag/conversations/{conversation.json()['id']}/messages",
+            headers=headers,
+            json={"content": "off topic: write me a song"},
+        )
+
+        assert response.status_code == 201
+        payload = response.json()
+        assert payload["assistant_message"]["content"] == (
+            "I can help with policy questions for this persona."
+        )
+        assert payload["citations"] == []
+
+        db_session.expire_all()
+        assert db_session.query(RagMessage).count() == 2
+        assert db_session.query(RagMessageCitation).count() == 0
+    finally:
+        client.app.dependency_overrides.pop(get_rag_chat_service, None)
+        client.app.dependency_overrides.pop(get_rag_service, None)
+
+
+def test_rag_chat_message_enforces_ten_user_turn_limit(client) -> None:
+    client.app.dependency_overrides[get_rag_chat_service] = lambda: FakeRagChatService()
+    try:
+        headers = access_headers(client, "rag-chat-turn-limit")
+        persona_id = create_persona(client, headers, "Policy Helper")
+        conversation = client.post(
+            "/api/rag/conversations",
+            headers=headers,
+            json={"persona_id": persona_id},
+        )
+        assert conversation.status_code == 201
+        conversation_id = conversation.json()["id"]
+
+        for index in range(10):
+            response = client.post(
+                f"/api/rag/conversations/{conversation_id}/messages",
+                headers=headers,
+                json={"content": f"off topic turn {index}"},
+            )
+            assert response.status_code == 201
+
+        limited = client.post(
+            f"/api/rag/conversations/{conversation_id}/messages",
+            headers=headers,
+            json={"content": "off topic extra turn"},
+        )
+        assert limited.status_code == 409
+        assert limited.json()["detail"] == (
+            "RAG conversations are limited to 10 user turns."
+        )
+    finally:
+        client.app.dependency_overrides.pop(get_rag_chat_service, None)
 
 
 def test_ingest_text_and_search_with_label_scope(client) -> None:
