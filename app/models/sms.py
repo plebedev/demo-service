@@ -16,13 +16,15 @@ class SmsConversation(Base):
     id: Mapped[int] = mapped_column(
         Integer, Identity(), primary_key=True, autoincrement=True
     )
-    phone_number: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    phone_number: Mapped[str] = mapped_column(
+        String(16), nullable=False, index=True
+    )  # E.164-formatted phone number
     run_id: Mapped[int] = mapped_column(
         ForeignKey("runs.id", ondelete="SET NULL"), nullable=True, index=True
-    )
+    )  # FK to the run associated with this SMS thread
     llm_reply_count: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default="0"
-    )
+    )  # number of LLM-generated replies sent in this conversation
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -46,17 +48,29 @@ class SmsMessage(Base):
         ForeignKey("sms_conversations.id", ondelete="CASCADE"),
         nullable=True,
         index=True,
-    )
+    )  # FK to the SMS conversation this message belongs to
     run_id: Mapped[int] = mapped_column(
         ForeignKey("runs.id", ondelete="SET NULL"), nullable=True, index=True
-    )
-    phone_number: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
-    direction: Mapped[str] = mapped_column(String(16), nullable=False)
-    body: Mapped[str] = mapped_column(Text(), nullable=False)
-    provider: Mapped[str] = mapped_column(String(32), nullable=False, default="twilio")
-    provider_message_sid: Mapped[str] = mapped_column(String(128), nullable=True)
-    status: Mapped[str] = mapped_column(String(32), nullable=False)
-    error_message: Mapped[str] = mapped_column(Text(), nullable=True)
+    )  # FK to the run associated with this message
+    phone_number: Mapped[str] = mapped_column(
+        String(16), nullable=False, index=True
+    )  # E.164-formatted phone number of the external party
+    direction: Mapped[str] = mapped_column(
+        String(16), nullable=False
+    )  # message direction: 'inbound' or 'outbound'
+    body: Mapped[str] = mapped_column(Text(), nullable=False)  # SMS message body text
+    provider: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="twilio"
+    )  # SMS provider used to send or receive the message
+    provider_message_sid: Mapped[str] = mapped_column(
+        String(128), nullable=True
+    )  # provider-assigned message identifier for delivery tracking
+    status: Mapped[str] = mapped_column(
+        String(32), nullable=False
+    )  # provider-reported delivery status
+    error_message: Mapped[str] = mapped_column(
+        Text(), nullable=True
+    )  # provider error detail if delivery failed
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -67,9 +81,15 @@ class SmsOptOut(Base):
 
     __tablename__ = "sms_opt_outs"
 
-    phone_number: Mapped[str] = mapped_column(String(16), primary_key=True)
-    source: Mapped[str] = mapped_column(String(64), nullable=False, default="inbound")
-    reason: Mapped[str] = mapped_column(Text(), nullable=True)
+    phone_number: Mapped[str] = mapped_column(
+        String(16), primary_key=True
+    )  # E.164-formatted phone number that opted out
+    source: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="inbound"
+    )  # how the opt-out was recorded: 'inbound' (STOP reply) or 'manual'
+    reason: Mapped[str] = mapped_column(
+        Text(), nullable=True
+    )  # optional operator note explaining the opt-out
     opted_out_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
