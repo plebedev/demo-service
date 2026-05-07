@@ -106,6 +106,7 @@ Important variables:
 | `RAG_EMBEDDING_PROVIDER` | Embedding provider for local RAG ingestion/search, currently `ollama` |
 | `RAG_OLLAMA_BASE_URL` | Local Ollama base URL, default `http://127.0.0.1:11434` |
 | `RAG_EMBEDDING_MODEL` | Ollama embedding model, default `all-minilm:l12-v2` |
+| `RAG_ORACLE_EMBEDDING_MODEL` | Oracle ONNX model object used with `VECTOR_EMBEDDING`, default `MINILM_L12_V2` |
 | `RAG_CHUNK_SIZE` | Character chunk target for RAG documents, default `800` |
 | `RAG_CHUNK_OVERLAP` | Character overlap between RAG chunks, default `80` |
 | `EMAIL_PROVIDER` | Existing draft provider selector for internal draft endpoints |
@@ -443,6 +444,135 @@ curl -s http://127.0.0.1:8000/api/rag/search \
   -H "Authorization: Bearer ${TOKEN}" \
   -H 'Content-Type: application/json' \
   -d '{"query":"What should I tell a renewal customer?","labels":["rag-demo"],"limit":5}'
+```
+
+## Oracle RAG model setup
+
+Oracle production uses native `VECTOR` storage and database-side embedding.
+Connect as `ADMIN` only for privileged setup, then load and verify the model as
+the application schema that the backend uses, normally `APP_RW`.
+
+As `ADMIN`, grant the app schema the required privileges:
+
+```sql
+GRANT CREATE MINING MODEL TO APP_RW;
+GRANT EXECUTE ON DBMS_CLOUD TO APP_RW;
+GRANT EXECUTE ON DBMS_VECTOR TO APP_RW;
+```
+
+Do not use the raw Hugging Face ONNX export for Oracle. It expects transformer
+token tensors and can fail with errors such as `ORA-54426`. Use Oracle's
+augmented MiniLM model instead:
+
+```bash
+mkdir -p ~/Downloads/demo-rag-models
+cd ~/Downloads/demo-rag-models
+
+curl -L \
+  -o all_MiniLM_L12_v2_augmented.zip \
+  'https://adwc4pm.objectstorage.us-ashburn-1.oci.customer-oci.com/p/TtH6hL2y25EypZ0-rrczRZ1aXp7v1ONbRBfCiT-BDBN8WLKQ3lgyW6RxCfIFLdA6/n/adwc4pm/b/OML-ai-models/o/all_MiniLM_L12_v2_augmented.zip'
+
+unzip all_MiniLM_L12_v2_augmented.zip
+```
+
+Upload `all_MiniLM_L12_v2.onnx` to a private OCI Object Storage bucket and
+create a pre-authenticated request with object-read access. The OCI Console path
+is:
+
+```text
+Storage -> Buckets -> Create bucket -> Upload object -> Pre-authenticated requests
+```
+
+The same can be done with OCI CLI:
+
+```bash
+oci os bucket create \
+  --name demo-rag-models \
+  --compartment-id <compartment_ocid>
+
+oci os object put \
+  --bucket-name demo-rag-models \
+  --name all_MiniLM_L12_v2.onnx \
+  --file ./all_MiniLM_L12_v2.onnx
+
+oci os preauth-request create \
+  --bucket-name demo-rag-models \
+  --name read-minilm-l12-v2 \
+  --access-type ObjectRead \
+  --object-name all_MiniLM_L12_v2.onnx \
+  --time-expires 2026-05-14T00:00:00Z
+```
+
+Connect as `APP_RW` and load the model from the PAR URL. The model name is the
+database object name used later in `VECTOR_EMBEDDING`; this app expects
+`MINILM_L12_V2`.
+
+```sql
+BEGIN
+  DBMS_VECTOR.DROP_ONNX_MODEL(
+    model_name => 'MINILM_L12_V2',
+    force => TRUE
+  );
+EXCEPTION
+  WHEN OTHERS THEN NULL;
+END;
+/
+
+BEGIN
+  DBMS_VECTOR.LOAD_ONNX_MODEL_CLOUD(
+    model_name => 'MINILM_L12_V2',
+    credential => NULL,
+    uri => '<PAR_URL_TO_all_MiniLM_L12_v2.onnx>'
+  );
+END;
+/
+```
+
+Verify the model as `APP_RW`:
+
+```sql
+SELECT model_name, algorithm, mining_function
+FROM user_mining_models
+WHERE model_name = 'MINILM_L12_V2';
+
+SELECT VECTOR_DIMENSION_COUNT(
+  VECTOR_EMBEDDING(MINILM_L12_V2 USING 'hello world' AS DATA)
+) AS dims;
+```
+
+Expected dimension count:
+
+```text
+384
+```
+
+After running Alembic against Oracle, verify the RAG tables as `APP_RW`:
+
+```sql
+SELECT table_name
+FROM user_tables
+WHERE table_name LIKE 'RAG_%'
+ORDER BY table_name;
+
+SELECT column_name, data_type
+FROM user_tab_columns
+WHERE table_name = 'RAG_DOCUMENT_CHUNKS'
+ORDER BY column_id;
+```
+
+If connected as `ADMIN`, use `ALL_TABLES` to confirm the app-owned objects:
+
+```sql
+SELECT owner, table_name
+FROM all_tables
+WHERE table_name LIKE 'RAG_%'
+ORDER BY owner, table_name;
+```
+
+Run the load SQL through SQLcl when scripting setup:
+
+```bash
+sql APP_RW/'<password>'@'<dsn>' @load_minilm.sql
 ```
 
 ## Alembic

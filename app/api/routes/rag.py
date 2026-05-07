@@ -84,17 +84,28 @@ async def ingest_rag_document_route(
 def search_rag_chunks_route(
     payload: RagSearchRequest,
     db: Session = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
     embeddings: EmbeddingProvider = Depends(get_rag_embedding_provider),
 ) -> RagSearchResponse:
     """Search nearest chunks within the requested labels."""
     try:
-        query_embedding = embeddings.embed([payload.query])[0]
-        results = RagStore().search_chunks(
-            db,
-            labels=payload.labels,
-            embedding=query_embedding,
-            limit=payload.limit,
-        )
+        store = RagStore()
+        if db.get_bind().dialect.name == "oracle":
+            results = store.search_chunks_with_oracle_query(
+                db,
+                labels=payload.labels,
+                query=payload.query,
+                oracle_model_name=settings.rag_oracle_embedding_model,
+                limit=payload.limit,
+            )
+        else:
+            query_embedding = embeddings.embed([payload.query])[0]
+            results = store.search_chunks(
+                db,
+                labels=payload.labels,
+                embedding=query_embedding,
+                limit=payload.limit,
+            )
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from app.api.routes.rag import get_rag_embedding_provider
+from app.core.config import get_settings
 from app.services.rag_store import EMBEDDING_DIMENSIONS
 
 
@@ -113,3 +114,9 @@ def test_rag_ingest_rejects_missing_content(client) -> None:
         )
     finally:
         client.app.dependency_overrides.pop(get_rag_embedding_provider, None)
+
+
+def test_default_oracle_rag_model_matches_loaded_model() -> None:
+    settings = get_settings()
+
+    assert settings.rag_oracle_embedding_model == "MINILM_L12_V2"

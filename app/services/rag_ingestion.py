@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import Settings
 from app.services.embeddings import EmbeddingProvider
-from app.services.rag_store import RagChunkInput, RagStore
+from app.services.rag_store import RagChunkInput, RagStore, RagTextChunkInput
 
 
 SUPPORTED_TEXT_MIME_TYPES = {"text/plain"}
@@ -82,24 +82,45 @@ class RagIngestionService:
         if not prepared_chunks:
             raise ValueError("No extractable text was available for RAG ingestion.")
 
-        embeddings = self.embeddings.embed([chunk.text for chunk in prepared_chunks])
-        chunk_inputs = [
-            RagChunkInput(
-                chunk_text=chunk.text,
-                embedding=embedding,
-                chunk_index=chunk.chunk_index,
-                page_number=chunk.page_number,
-                source_location=chunk.source_location,
+        if session.get_bind().dialect.name == "oracle":
+            text_chunk_inputs = [
+                RagTextChunkInput(
+                    chunk_text=chunk.text,
+                    chunk_index=chunk.chunk_index,
+                    page_number=chunk.page_number,
+                    source_location=chunk.source_location,
+                )
+                for chunk in prepared_chunks
+            ]
+            document = self.store.create_document_with_oracle_embeddings(
+                session,
+                source=resolved_source,
+                title=title,
+                labels=labels,
+                chunks=text_chunk_inputs,
+                oracle_model_name=settings.rag_oracle_embedding_model,
             )
-            for chunk, embedding in zip(prepared_chunks, embeddings)
-        ]
-        document = self.store.create_document(
-            session,
-            source=resolved_source,
-            title=title,
-            labels=labels,
-            chunks=chunk_inputs,
-        )
+            chunk_count = len(text_chunk_inputs)
+        else:
+            embeddings = self.embeddings.embed([chunk.text for chunk in prepared_chunks])
+            chunk_inputs = [
+                RagChunkInput(
+                    chunk_text=chunk.text,
+                    embedding=embedding,
+                    chunk_index=chunk.chunk_index,
+                    page_number=chunk.page_number,
+                    source_location=chunk.source_location,
+                )
+                for chunk, embedding in zip(prepared_chunks, embeddings)
+            ]
+            document = self.store.create_document(
+                session,
+                source=resolved_source,
+                title=title,
+                labels=labels,
+                chunks=chunk_inputs,
+            )
+            chunk_count = len(chunk_inputs)
         session.commit()
 
         return RagIngestionResult(
@@ -107,7 +128,7 @@ class RagIngestionService:
             source=document.source,
             title=document.title,
             labels=[label.label_key for label in document.labels],
-            chunk_count=len(chunk_inputs),
+            chunk_count=chunk_count,
         )
 
 
