@@ -6,6 +6,7 @@ from app.models.invitation import (
     InvitationRedemption,
     InvitationRequest,
 )
+from app.models.rag import RagDocument, RagDocumentChunk, RagDocumentLabel, RagLabel
 from app.models.run import Run
 from app.models.run_event import RunEvent
 from app.models.sms import SmsConversation, SmsMessage, SmsOptOut
@@ -15,6 +16,10 @@ __all__ = [
     "InvitationCode",
     "InvitationRedemption",
     "InvitationRequest",
+    "RagDocument",
+    "RagDocumentChunk",
+    "RagDocumentLabel",
+    "RagLabel",
     "Run",
     "RunEvent",
     "SmsConversation",

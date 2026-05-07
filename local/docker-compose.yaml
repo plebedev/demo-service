@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: postgres:16-alpine
+    image: pgvector/pgvector:pg16
     container_name: demo-service-postgres
     restart: unless-stopped
     env_file:
@@ -15,5 +15,30 @@ services:
       timeout: 5s
       retries: 5
 
+  ollama:
+    image: ollama/ollama:latest
+    container_name: demo-service-ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+
+  ollama-pull-all-minilm:
+    image: curlimages/curl:latest
+    depends_on:
+      - ollama
+    restart: "no"
+    command:
+      - /bin/sh
+      - -c
+      - |
+        until curl -fsS http://ollama:11434/api/tags >/dev/null; do
+          sleep 2
+        done
+        curl -fsS http://ollama:11434/api/pull \
+          -d '{"model":"all-minilm:l12-v2"}'
+
 volumes:
   postgres-data:
+  ollama-data:

@@ -66,6 +66,20 @@ class Settings(BaseSettings):
         default=400_000, alias="MAX_TOTAL_WORKFLOW_TEXT_BYTES"
     )
     max_pasted_text_bytes: int = Field(default=200_000, alias="MAX_PASTED_TEXT_BYTES")
+    rag_embedding_provider: str = Field(
+        default="ollama", alias="RAG_EMBEDDING_PROVIDER"
+    )
+    rag_ollama_base_url: str = Field(
+        default="http://127.0.0.1:11434", alias="RAG_OLLAMA_BASE_URL"
+    )
+    rag_embedding_model: str = Field(
+        default="all-minilm:l12-v2", alias="RAG_EMBEDDING_MODEL"
+    )
+    rag_oracle_embedding_model: str = Field(
+        default="MINILM_L12_V2", alias="RAG_ORACLE_EMBEDDING_MODEL"
+    )
+    rag_chunk_size: int = Field(default=800, alias="RAG_CHUNK_SIZE")
+    rag_chunk_overlap: int = Field(default=80, alias="RAG_CHUNK_OVERLAP")
 
     twilio_account_sid: str | None = Field(default=None, alias="TWILIO_ACCOUNT_SID")
     twilio_auth_token: str | None = Field(default=None, alias="TWILIO_AUTH_TOKEN")

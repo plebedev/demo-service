@@ -103,6 +103,12 @@ Important variables:
 | `MAX_EXTRACTED_TEXT_BYTES` | Total extracted-text budget kept from accepted files |
 | `MAX_PASTED_TEXT_BYTES` | Maximum raw pasted text persisted on the run |
 | `MAX_TOTAL_WORKFLOW_TEXT_BYTES` | Maximum normalized text passed to workflow execution |
+| `RAG_EMBEDDING_PROVIDER` | Embedding provider for local RAG ingestion/search, currently `ollama` |
+| `RAG_OLLAMA_BASE_URL` | Local Ollama base URL, default `http://127.0.0.1:11434` |
+| `RAG_EMBEDDING_MODEL` | Ollama embedding model, default `all-minilm:l12-v2` |
+| `RAG_ORACLE_EMBEDDING_MODEL` | Oracle ONNX model object used with `VECTOR_EMBEDDING`, default `MINILM_L12_V2` |
+| `RAG_CHUNK_SIZE` | Character chunk target for RAG documents, default `800` |
+| `RAG_CHUNK_OVERLAP` | Character overlap between RAG chunks, default `80` |
 | `EMAIL_PROVIDER` | Existing draft provider selector for internal draft endpoints |
 | `INVITE_EMAIL_FROM` | Legacy draft sender placeholder |
 | `INVITE_EMAIL_REPLY_TO` | Legacy draft reply-to placeholder |
@@ -328,6 +334,29 @@ cp local/.env.backend.example local/.env.backend
 task local-up
 ```
 
+Local development starts Postgres with pgvector plus an Ollama container for
+embedding generation. The one-shot `ollama-pull-all-minilm` Compose service
+pulls `all-minilm:l12-v2` into the persistent `ollama-data` Docker volume the
+first time local infrastructure starts.
+
+Verify pgvector:
+
+```bash
+docker exec -it demo-service-postgres psql -U demo_service -d demo_service
+```
+
+```sql
+SELECT extname, extversion FROM pg_extension WHERE extname = 'vector';
+SELECT '[1,2,3]'::vector;
+```
+
+Verify the local embedding model:
+
+```bash
+curl http://127.0.0.1:11434/api/embed \
+  -d '{"model":"all-minilm:l12-v2","input":"hello world"}'
+```
+
 4. Apply migrations:
 
 ```bash
@@ -361,6 +390,202 @@ curl -X POST http://127.0.0.1:8000/api/access/redeem \
   -H 'Content-Type: application/json' \
   -d '{"code":"demo-local-code"}'
 ```
+
+## Local RAG API smoke test
+
+The protected RAG endpoints let you test document ingestion and scoped vector
+search before adding frontend UI. They accept pasted text, `.txt` files, and
+PDFs with extractable text. Images, OCR-only PDFs, audio/video, and web lookup
+remain outside the demo guardrails.
+
+The backend binds a RAG implementation at the service boundary:
+
+- local Postgres uses app-side chunking, Ollama embeddings, and pgvector search
+- Oracle uses native `VECTOR_CHUNKS`, `VECTOR_EMBEDDING`, and vector search
+
+The public API stays the same across environments.
+
+Create an invite code, redeem it, and export the token:
+
+```bash
+ADMIN_API_SECRET=demo-admin-change-me \
+bash deploy/scripts/invitation-admin.sh create rag-local-code rag-local 5
+```
+
+```bash
+TOKEN="$(
+  curl -s http://127.0.0.1:8000/api/access/redeem \
+    -H 'Content-Type: application/json' \
+    -d '{"code":"rag-local-code"}' \
+  | python -c 'import json,sys; print(json.load(sys.stdin)["access_token"])'
+)"
+```
+
+Ingest pasted text under one or more labels:
+
+```bash
+curl -s http://127.0.0.1:8000/api/rag/documents \
+  -H "Authorization: Bearer ${TOKEN}" \
+  -F labels=rag-demo \
+  -F labels=messy-notes-v1 \
+  -F source=local-note.txt \
+  -F title='Local RAG note' \
+  -F input_text='Renewal policy: customers with urgent operational risk need concise migration guidance.'
+```
+
+Ingest a text or PDF file instead:
+
+```bash
+curl -s http://127.0.0.1:8000/api/rag/documents \
+  -H "Authorization: Bearer ${TOKEN}" \
+  -F labels=rag-demo \
+  -F source=handbook.pdf \
+  -F title='Handbook' \
+  -F file=@handbook.pdf
+```
+
+Search only inside selected labels:
+
+```bash
+curl -s http://127.0.0.1:8000/api/rag/search \
+  -H "Authorization: Bearer ${TOKEN}" \
+  -H 'Content-Type: application/json' \
+  -d '{"query":"What should I tell a renewal customer?","labels":["rag-demo"],"limit":5}'
+```
+
+## Oracle RAG model setup
+
+Oracle production uses native `VECTOR` storage and database-side embedding.
+Connect as `ADMIN` only for privileged setup, then load and verify the model as
+the application schema that the backend uses, normally `APP_RW`.
+
+As `ADMIN`, grant the app schema the required privileges:
+
+```sql
+GRANT CREATE MINING MODEL TO APP_RW;
+GRANT EXECUTE ON DBMS_CLOUD TO APP_RW;
+GRANT EXECUTE ON DBMS_VECTOR TO APP_RW;
+```
+
+Do not use the raw Hugging Face ONNX export for Oracle. It expects transformer
+token tensors and can fail with errors such as `ORA-54426`. Use Oracle's
+augmented MiniLM model instead:
+
+```bash
+mkdir -p ~/Downloads/demo-rag-models
+cd ~/Downloads/demo-rag-models
+
+curl -L \
+  -o all_MiniLM_L12_v2_augmented.zip \
+  'https://adwc4pm.objectstorage.us-ashburn-1.oci.customer-oci.com/p/TtH6hL2y25EypZ0-rrczRZ1aXp7v1ONbRBfCiT-BDBN8WLKQ3lgyW6RxCfIFLdA6/n/adwc4pm/b/OML-ai-models/o/all_MiniLM_L12_v2_augmented.zip'
+
+unzip all_MiniLM_L12_v2_augmented.zip
+```
+
+Upload `all_MiniLM_L12_v2.onnx` to a private OCI Object Storage bucket and
+create a pre-authenticated request with object-read access. The OCI Console path
+is:
+
+```text
+Storage -> Buckets -> Create bucket -> Upload object -> Pre-authenticated requests
+```
+
+The same can be done with OCI CLI:
+
+```bash
+oci os bucket create \
+  --name demo-rag-models \
+  --compartment-id <compartment_ocid>
+
+oci os object put \
+  --bucket-name demo-rag-models \
+  --name all_MiniLM_L12_v2.onnx \
+  --file ./all_MiniLM_L12_v2.onnx
+
+oci os preauth-request create \
+  --bucket-name demo-rag-models \
+  --name read-minilm-l12-v2 \
+  --access-type ObjectRead \
+  --object-name all_MiniLM_L12_v2.onnx \
+  --time-expires 2026-05-14T00:00:00Z
+```
+
+Connect as `APP_RW` and load the model from the PAR URL. The model name is the
+database object name used later in `VECTOR_EMBEDDING`; this app expects
+`MINILM_L12_V2`.
+
+```sql
+BEGIN
+  DBMS_VECTOR.DROP_ONNX_MODEL(
+    model_name => 'MINILM_L12_V2',
+    force => TRUE
+  );
+EXCEPTION
+  WHEN OTHERS THEN NULL;
+END;
+/
+
+BEGIN
+  DBMS_VECTOR.LOAD_ONNX_MODEL_CLOUD(
+    model_name => 'MINILM_L12_V2',
+    credential => NULL,
+    uri => '<PAR_URL_TO_all_MiniLM_L12_v2.onnx>'
+  );
+END;
+/
+```
+
+Verify the model as `APP_RW`:
+
+```sql
+SELECT model_name, algorithm, mining_function
+FROM user_mining_models
+WHERE model_name = 'MINILM_L12_V2';
+
+SELECT VECTOR_DIMENSION_COUNT(
+  VECTOR_EMBEDDING(MINILM_L12_V2 USING 'hello world' AS DATA)
+) AS dims;
+```
+
+Expected dimension count:
+
+```text
+384
+```
+
+After running Alembic against Oracle, verify the RAG tables as `APP_RW`:
+
+```sql
+SELECT table_name
+FROM user_tables
+WHERE table_name LIKE 'RAG_%'
+ORDER BY table_name;
+
+SELECT column_name, data_type
+FROM user_tab_columns
+WHERE table_name = 'RAG_DOCUMENT_CHUNKS'
+ORDER BY column_id;
+```
+
+If connected as `ADMIN`, use `ALL_TABLES` to confirm the app-owned objects:
+
+```sql
+SELECT owner, table_name
+FROM all_tables
+WHERE table_name LIKE 'RAG_%'
+ORDER BY owner, table_name;
+```
+
+Run the load SQL through SQLcl when scripting setup:
+
+```bash
+sql APP_RW/'<password>'@'<dsn>' @load_minilm.sql
+```
+
+Once the Oracle model and migrations are in place, the same protected RAG API
+works against Oracle. Ingestion sends extracted text to Oracle `VECTOR_CHUNKS`,
+stores each chunk with `VECTOR_EMBEDDING(MINILM_L12_V2 USING ... AS DATA)`, and
+search embeds the query with the same model inside Oracle.
 
 ## Alembic
 
