@@ -116,6 +116,12 @@ Important variables:
 | `OCI_EMAIL_SMTP_PASSWORD` | OCI Email Delivery SMTP password |
 | `OCI_EMAIL_FROM_ADDRESS` | Verified sender address for OCI Email Delivery |
 | `OCI_EMAIL_FROM_NAME` | Display name for automatic invite emails |
+| `TWILIO_ACCOUNT_SID` | Twilio Account SID for SMS delivery |
+| `TWILIO_AUTH_TOKEN` | Twilio auth token for SMS delivery and webhook signature checks |
+| `TWILIO_FROM_NUMBER` | Twilio sender phone number used for completion texts |
+| `SMS_NOTIFICATION_ENABLED` | Feature flag returned as `features.SmsNotification`; defaults to `false` until SMS campaign approval |
+| `SMS_REPLY_PROVIDER` | PydanticAI provider for SMS reply/opt-out classification, default `openai` |
+| `SMS_REPLY_MODEL` | Small model used for bounded SMS replies, default `gpt-5-mini` |
 | `OPENAI_API_KEY` | API key for workflow agents using OpenAI models |
 | `ANTHROPIC_API_KEY` | API key for workflow agents or post-processors using Anthropic models |
 | `FIREWORKS_API_KEY` | Reserved future provider key for FireworksAI |
@@ -152,11 +158,16 @@ Follow-up constraints:
 - second follow-ups are rejected
 - unrelated broad chat is rejected
 - follow-up response state is stored with the run
+- SMS replies are limited to two LLM-generated turns per notification thread
 
 The backend publishes these guardrails through the protected status and
 access-verification responses. Submitted runs execute the bounded messy-notes
 workflow, persist a generated brief, store structured run events, and run the
 tool/handoff audit post-processor.
+
+`GET /api/status` also returns feature availability under `features`. The first
+flag is `SmsNotification`, controlled by `SMS_NOTIFICATION_ENABLED`. This flag
+can stay `false` while the backend remains healthy and available.
 
 ## Invite request intake
 
@@ -187,10 +198,30 @@ M6 adds protected API support for first-run usability and bounded follow-up:
 - `GET /api/runs/<run_id>/summary` returns a compact execution summary for demos
 - `POST /api/runs/<run_id>/sample` loads one sample set into a draft run
 - `POST /api/runs/<run_id>/follow-up` answers exactly one brief-scoped follow-up
+- `POST /api/runs/sms-status` checks US phone validity and permanent opt-out status
 - `POST /api/runs/<run_id>/notification-preference` stores optional SMS preference and a normalized US phone number
 
 Notification sending is intentionally not an LLM tool. The service persists the
-preference on the run and leaves actual SMS delivery as a coded completion path.
+preference on the run and sends Twilio SMS from coded backend completion logic.
+Inbound Twilio replies are accepted at:
+
+```text
+POST /api/webhooks/twilio/sms
+```
+
+Configure that public URL in Twilio as the messaging webhook. The demo Helm
+values expose only `/api/webhooks/twilio/sms` for backend ingress; internal admin
+APIs remain unexposed. Webhook signature validation is performed when Twilio
+sends `X-Twilio-Signature` and `TWILIO_AUTH_TOKEN` is configured.
+
+SMS reply behavior is intentionally bounded:
+
+- obvious STOP-like messages are handled deterministically
+- close opt-out variants are classified by the configured small PydanticAI model
+- opted-out phone numbers are stored in `sms_opt_outs` and blocked permanently
+- future completion sends to blocked numbers are skipped and recorded
+- the first two non-opt-out inbound replies get concise LLM-generated responses
+- third and later replies receive a canned limit message pointing back to the app
 
 Run tests are part of the normal workflow:
 

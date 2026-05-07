@@ -57,6 +57,7 @@ configEnv:
   INVITE_EMAIL_DRAFT_PROVIDER: "openai"
   INVITE_EMAIL_DRAFT_MODEL: "gpt-5-mini"
   OCI_EMAIL_SMTP_PORT: "587"
+  SMS_NOTIFICATION_ENABLED: "false"
 
 secretEnv: {}
 existingSecretName: ""

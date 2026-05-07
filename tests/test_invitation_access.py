@@ -135,7 +135,9 @@ def test_protected_status_endpoint_requires_valid_token(client) -> None:
         headers={"Authorization": f"Bearer {token}"},
     )
     assert authenticated.status_code == 200
-    assert authenticated.json()["phase1"]["limits"]["max_files_per_run"] == 3
+    payload = authenticated.json()
+    assert payload["phase1"]["limits"]["max_files_per_run"] == 3
+    assert payload["features"]["SmsNotification"] is True
 
 
 def test_redeeming_code_increments_usage_and_creates_redemption(

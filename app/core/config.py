@@ -69,6 +69,12 @@ class Settings(BaseSettings):
 
     twilio_account_sid: str | None = Field(default=None, alias="TWILIO_ACCOUNT_SID")
     twilio_auth_token: str | None = Field(default=None, alias="TWILIO_AUTH_TOKEN")
+    twilio_from_number: str | None = Field(default=None, alias="TWILIO_FROM_NUMBER")
+    sms_notification_enabled: bool = Field(
+        default=False, alias="SMS_NOTIFICATION_ENABLED"
+    )
+    sms_reply_provider: str = Field(default="openai", alias="SMS_REPLY_PROVIDER")
+    sms_reply_model: str = Field(default="gpt-5-mini", alias="SMS_REPLY_MODEL")
     plivo_auth_id: str | None = Field(default=None, alias="PLIVO_AUTH_ID")
     plivo_auth_token: str | None = Field(default=None, alias="PLIVO_AUTH_TOKEN")
     email_provider: str = Field(default="stub", alias="EMAIL_PROVIDER")

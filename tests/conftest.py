@@ -56,6 +56,7 @@ def database_url(postgres_container: PostgresContainer) -> Iterator[str]:
         "ENVIRONMENT": os.environ.get("ENVIRONMENT"),
         "OPENAI_API_KEY": os.environ.get("OPENAI_API_KEY"),
         "ANTHROPIC_API_KEY": os.environ.get("ANTHROPIC_API_KEY"),
+        "SMS_NOTIFICATION_ENABLED": os.environ.get("SMS_NOTIFICATION_ENABLED"),
     }
 
     os.environ["DATABASE_URL"] = url
@@ -65,6 +66,7 @@ def database_url(postgres_container: PostgresContainer) -> Iterator[str]:
     os.environ["ENVIRONMENT"] = "test"
     os.environ["OPENAI_API_KEY"] = "test-openai-key"
     os.environ["ANTHROPIC_API_KEY"] = "test-anthropic-key"
+    os.environ["SMS_NOTIFICATION_ENABLED"] = "true"
 
     get_settings.cache_clear()
     get_engine.cache_clear()
@@ -113,6 +115,9 @@ def reset_database(
             text(
                 """
                 TRUNCATE TABLE
+                    sms_messages,
+                    sms_conversations,
+                    sms_opt_outs,
                     run_events,
                     runs,
                     invitation_requests,

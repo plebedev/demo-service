@@ -633,6 +633,7 @@ def test_notification_preference_capture_validates_us_phone(client, db_session) 
     assert payload["notification_preference_json"] == {
         "wants_sms": True,
         "phone_number": "+14155550134",
+        "phone_number_blocked": False,
     }
 
     stored = db_session.get(Run, run_id)

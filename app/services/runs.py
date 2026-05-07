@@ -168,8 +168,18 @@ def submit_run(db: Session, run: Run, payload: RunSubmitRequest | None = None) -
     return run
 
 
-def serialize_run(run: Run) -> RunResponse:
+def serialize_run(run: Run, db: Session | None = None) -> RunResponse:
     """Convert one persisted ORM run into the API response shape."""
+    notification_preference = _deserialize_model(
+        run.notification_preference_serialized, NotificationPreference
+    )
+    if db is not None:
+        from app.services.notifications import enrich_notification_preference
+
+        notification_preference = enrich_notification_preference(
+            db, notification_preference
+        )
+
     return RunResponse(
         id=run.id,
         status=RunStatus(run.status),
@@ -201,15 +211,13 @@ def serialize_run(run: Run) -> RunResponse:
         follow_up_response_json=_deserialize_model(
             run.follow_up_response_serialized, FollowUpResponse
         ),
-        notification_preference_json=_deserialize_model(
-            run.notification_preference_serialized, NotificationPreference
-        ),
+        notification_preference_json=notification_preference,
     )
 
 
-def serialize_run_list(runs: list[Run]) -> RunListResponse:
+def serialize_run_list(runs: list[Run], db: Session | None = None) -> RunListResponse:
     """Convert a run list to its API wrapper."""
-    return RunListResponse(runs=[serialize_run(run) for run in runs])
+    return RunListResponse(runs=[serialize_run(run, db) for run in runs])
 
 
 def _normalize_title(value: str | None) -> str | None:
