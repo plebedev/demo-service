@@ -15,6 +15,7 @@ from pydantic_ai.usage import UsageLimits
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import Settings, get_settings
+from app.core.experiences import EXPERIENCE_LABELS, ExperienceId, parse_experience_id
 from app.core.logging import log_event
 from app.db.models import InvitationCode, InvitationRequest
 from app.db.session import get_session_factory
@@ -74,7 +75,7 @@ def fulfill_invite_request(
         try:
             invitation_code = InvitationCode(
                 code=_generate_unique_code(db),
-                label=f"Invite request #{invite_request.id}",
+                label=_request_experience_id(invite_request).value,
                 max_uses=INVITE_REQUEST_MAX_USES,
                 is_active=True,
                 use_count=0,
@@ -164,7 +165,7 @@ async def _draft_personalized_email(
         model=model,
         instructions=(
             "Draft short, warm, professional invitation emails for an invite-only "
-            "messy-notes demo. Personalize wording only from the request context. "
+            "selected demo experience. Personalize wording only from the request context. "
             "Do not approve, reject, or evaluate the requester. Include the exact "
             "invite code and simple start instructions. Keep the email concise."
         ),
@@ -172,10 +173,13 @@ async def _draft_personalized_email(
         model_settings={"temperature": 0.3, "max_tokens": 700},
     )
     base_url = settings.invite_email_base_url.rstrip("/")
+    experience_id = _request_experience_id(invite_request)
+    experience_label = EXPERIENCE_LABELS[experience_id]
     result = await agent.run(
         (
             f"Requester name: {invite_request.name}\n"
             f"Requester email: {invite_request.email}\n"
+            f"Requested experience: {experience_label}\n"
             f"Reason for access: {invite_request.reason}\n"
             f"Invitation code: {invitation_code.code}\n"
             f"Start URL: {base_url}/\n"
@@ -194,13 +198,16 @@ def build_fallback_invite_email(
 ) -> EmailDraft:
     """Build deterministic invite email content when LLM drafting is unavailable."""
     base_url = settings.invite_email_base_url.rstrip("/")
+    experience_id = _request_experience_id(invite_request)
+    experience_label = EXPERIENCE_LABELS[experience_id]
     safe_name = html.escape(invite_request.name)
     safe_code = html.escape(invitation_code.code)
     safe_base_url = html.escape(base_url)
-    subject = "Your messy-notes demo invitation"
+    safe_experience_label = html.escape(experience_label)
+    subject = f"Your {experience_label} invitation"
     text_body = (
         f"Hi {invite_request.name},\n\n"
-        "Thanks for requesting access to the messy-notes demo. "
+        f"Thanks for requesting access to {experience_label}. "
         "Based on your note, this should give you a practical look at the "
         "bounded workflow.\n\n"
         f"Invitation code: {invitation_code.code}\n"
@@ -210,8 +217,8 @@ def build_fallback_invite_email(
     )
     html_body = (
         f"<p>Hi {safe_name},</p>"
-        "<p>Thanks for requesting access to the messy-notes demo. Based on your "
-        "note, this should give you a practical look at the bounded workflow.</p>"
+        f"<p>Thanks for requesting access to {safe_experience_label}. Based on "
+        "your note, this should give you a practical look at the bounded workflow.</p>"
         f"<p><strong>Invitation code:</strong> {safe_code}</p>"
         f'<p>Start here: <a href="{safe_base_url}/">{safe_base_url}/</a></p>'
         "<p>The demo supports pasted text, text files, and PDFs with extractable "
@@ -234,3 +241,10 @@ def _generate_unique_code(db: Session) -> str:
         if existing is None:
             return code
     raise RuntimeError("Could not generate a unique invitation code.")
+
+
+def _request_experience_id(invite_request: InvitationRequest) -> ExperienceId:
+    """Return the selected experience for an invite request."""
+    if invite_request.label is None:
+        return ExperienceId.MESSY_NOTES
+    return parse_experience_id(invite_request.label)

@@ -11,19 +11,19 @@ from app.db.models import Run, RunEvent
 from app.services.workflow_executor import WorkflowExecutionError, execute_run_workflow
 
 
-def create_code(client, code: str) -> None:
+def create_code(client, code: str, label: str = "messy-notes") -> None:
     """Insert an invitation code through the admin API for test setup."""
     response = client.post(
         "/api/internal/admin/invitations",
         headers={"X-Admin-Secret": "test-admin-secret"},
-        json={"code": code},
+        json={"code": code, "label": label},
     )
     assert response.status_code == 201
 
 
-def access_headers(client, code: str) -> dict[str, str]:
+def access_headers(client, code: str, label: str = "messy-notes") -> dict[str, str]:
     """Redeem a code and return bearer auth headers."""
-    create_code(client, code)
+    create_code(client, code, label)
     redeem = client.post("/api/access/redeem", json={"code": code})
     assert redeem.status_code == 200
     token = redeem.json()["access_token"]
@@ -74,6 +74,17 @@ def test_run_endpoints_require_access_token(client) -> None:
     response = client.get("/api/runs")
     assert response.status_code == 401
     assert response.json()["detail"] == "Access token required."
+
+
+def test_run_endpoints_reject_rag_experience_token(client) -> None:
+    headers = access_headers(client, "runs-rag-token", "rag-demo")
+
+    response = client.get("/api/runs", headers=headers)
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == (
+        "Access token is not valid for this experience."
+    )
 
 
 def test_create_and_get_run(client, db_session) -> None:

@@ -4,12 +4,14 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
+from app.core.experiences import ExperienceId
+
 
 class CreateInvitationCodeRequest(BaseModel):
     """Payload for creating an invitation code."""
 
     code: str | None = Field(default=None, min_length=1, max_length=128)
-    label: str | None = Field(default=None, max_length=255)
+    label: ExperienceId = ExperienceId.MESSY_NOTES
     max_uses: int | None = Field(default=None, ge=1)
     invitation_request_id: int | None = Field(default=None, ge=1)
 
@@ -19,7 +21,7 @@ class InvitationCodeResponse(BaseModel):
 
     id: int
     code: str
-    label: str | None
+    label: ExperienceId | None
     is_active: bool
     max_uses: int | None
     use_count: int
@@ -41,6 +43,7 @@ class InvitationRequestResponse(BaseModel):
     id: int
     name: str
     email: str
+    label: ExperienceId | None
     reason: str
     status: str
     created_at: datetime
@@ -71,7 +74,7 @@ class IssueInviteCodeDraftRequest(BaseModel):
     """Request for linking an invite request to a new code and draft email."""
 
     code: str | None = Field(default=None, min_length=1, max_length=128)
-    label: str | None = Field(default=None, max_length=255)
+    label: ExperienceId | None = None
     max_uses: int | None = Field(default=1, ge=1)
     reviewer_note: str | None = Field(default=None, max_length=2000)
 

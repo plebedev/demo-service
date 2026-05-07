@@ -13,6 +13,7 @@ from secrets import token_hex
 from fastapi import HTTPException, status
 
 from app.core.config import Settings
+from app.core.experiences import ExperienceId, parse_experience_id
 
 
 @dataclass(frozen=True)
@@ -22,6 +23,7 @@ class AccessTokenClaims:
     token_id: str
     invitation_code_id: int
     code: str
+    experience_id: ExperienceId
     issued_at: datetime
     expires_at: datetime
 
@@ -50,6 +52,7 @@ def create_access_token(
     settings: Settings,
     invitation_code_id: int,
     code: str,
+    experience_id: ExperienceId,
     now: datetime | None = None,
 ) -> tuple[str, AccessTokenClaims]:
     """Create a signed access token and return both the token and parsed claims."""
@@ -59,6 +62,7 @@ def create_access_token(
         "jti": token_hex(16),
         "invitation_code_id": invitation_code_id,
         "code": code,
+        "experience_id": experience_id.value,
         "iat": int(issued_at.timestamp()),
         "exp": int(expires_at.timestamp()),
     }
@@ -72,6 +76,7 @@ def create_access_token(
         token_id=str(payload["jti"]),
         invitation_code_id=invitation_code_id,
         code=code,
+        experience_id=experience_id,
         issued_at=issued_at,
         expires_at=expires_at,
     )
@@ -99,6 +104,7 @@ def verify_access_token(token: str, settings: Settings) -> AccessTokenClaims:
         token_id = str(payload["jti"])
         invitation_code_id = int(payload["invitation_code_id"])
         code = str(payload["code"])
+        experience_id = parse_experience_id(str(payload["experience_id"]))
         issued_at = datetime.fromtimestamp(int(payload["iat"]), tz=UTC)
         expires_at = datetime.fromtimestamp(int(payload["exp"]), tz=UTC)
     except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
@@ -117,6 +123,7 @@ def verify_access_token(token: str, settings: Settings) -> AccessTokenClaims:
         token_id=token_id,
         invitation_code_id=invitation_code_id,
         code=code,
+        experience_id=experience_id,
         issued_at=issued_at,
         expires_at=expires_at,
     )

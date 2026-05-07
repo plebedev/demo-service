@@ -5,6 +5,7 @@ import re
 
 from pydantic import BaseModel, Field, field_validator
 
+from app.core.experiences import ExperienceId
 from app.core.phase1 import Phase1Guardrails
 
 
@@ -19,6 +20,7 @@ class InviteRequestCreate(BaseModel):
 
     name: str = Field(min_length=1, max_length=255)
     email: str = Field(min_length=3, max_length=320)
+    experience_id: ExperienceId
     reason: str = Field(min_length=10, max_length=2000)
 
     @field_validator("name", "email", "reason")
@@ -50,6 +52,8 @@ class AccessTokenResponse(BaseModel):
 
     access_token: str
     token_type: str = "bearer"
+    experience_id: ExperienceId
+    redirect_path: str
     expires_at: datetime
     phase1: Phase1Guardrails
 
@@ -59,5 +63,7 @@ class AccessTokenVerificationResponse(BaseModel):
 
     status: str
     token_id: str
+    experience_id: ExperienceId
+    redirect_path: str
     expires_at: datetime
     phase1: Phase1Guardrails

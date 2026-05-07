@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_access_token
 from app.core.config import Settings, get_settings
+from app.core.experiences import EXPERIENCE_ROUTES, parse_experience_id
 from app.core.logging import log_event
 from app.core.phase1 import build_phase1_guardrails
 from app.core.security import AccessTokenClaims
@@ -45,6 +46,7 @@ def create_invite_request(
     invite_request = InvitationRequest(
         name=payload.name,
         email=payload.email,
+        label=payload.experience_id.value,
         reason=payload.reason,
         user_agent=request.headers.get("user-agent"),
         ip_hash=hash_ip_address(
@@ -59,6 +61,7 @@ def create_invite_request(
         "invite_request_submitted",
         invitation_request_id=invite_request.id,
         email=invite_request.email,
+        experience_id=payload.experience_id.value,
     )
     background_tasks.add_task(fulfill_invite_request, invite_request.id)
     return InviteRequestResponse(
@@ -98,11 +101,19 @@ def redeem_invitation_code(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Invitation code has reached its usage limit.",
         )
+    try:
+        experience_id = parse_experience_id(invitation_code.label)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=str(exc),
+        ) from exc
 
     access_token, claims = create_access_token(
         settings=settings,
         invitation_code_id=invitation_code.id,
         code=invitation_code.code,
+        experience_id=experience_id,
     )
     invitation_code.use_count += 1
     invitation_code.last_used_at = datetime.now(UTC)
@@ -120,6 +131,8 @@ def redeem_invitation_code(
 
     return AccessTokenResponse(
         access_token=access_token,
+        experience_id=claims.experience_id,
+        redirect_path=EXPERIENCE_ROUTES[claims.experience_id],
         expires_at=claims.expires_at,
         phase1=build_phase1_guardrails(settings),
     )
@@ -134,6 +147,8 @@ def verify_access(
     return AccessTokenVerificationResponse(
         status="ok",
         token_id=claims.token_id,
+        experience_id=claims.experience_id,
+        redirect_path=EXPERIENCE_ROUTES[claims.experience_id],
         expires_at=claims.expires_at,
         phase1=build_phase1_guardrails(settings),
     )

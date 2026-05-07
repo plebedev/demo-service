@@ -79,6 +79,7 @@ class InvitationRequest(Base):
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     email: Mapped[str] = mapped_column(String(320), nullable=False, index=True)
+    label: Mapped[str] = mapped_column(String(255), nullable=True)
     reason: Mapped[str] = mapped_column(Text(), nullable=False)
     status: Mapped[str] = mapped_column(
         String(32), nullable=False, default="submitted", server_default="submitted"

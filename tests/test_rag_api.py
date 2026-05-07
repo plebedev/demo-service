@@ -24,19 +24,19 @@ class FakeEmbeddingProvider:
         return embedding
 
 
-def create_code(client, code: str) -> None:
+def create_code(client, code: str, label: str = "rag-demo") -> None:
     """Insert an invitation code through the admin API for test setup."""
     response = client.post(
         "/api/internal/admin/invitations",
         headers={"X-Admin-Secret": "test-admin-secret"},
-        json={"code": code},
+        json={"code": code, "label": label},
     )
     assert response.status_code == 201
 
 
-def access_headers(client, code: str) -> dict[str, str]:
+def access_headers(client, code: str, label: str = "rag-demo") -> dict[str, str]:
     """Redeem a code and return bearer auth headers."""
-    create_code(client, code)
+    create_code(client, code, label)
     redeem = client.post("/api/access/redeem", json={"code": code})
     assert redeem.status_code == 200
     token = redeem.json()["access_token"]
@@ -53,11 +53,24 @@ def test_rag_endpoints_require_access_token(client) -> None:
     assert response.json()["detail"] == "Access token required."
 
 
+def test_rag_endpoints_reject_messy_notes_experience_token(client) -> None:
+    headers = access_headers(client, "rag-messy-token", "messy-notes")
+
+    response = client.post(
+        "/api/rag/search",
+        headers=headers,
+        json={"query": "alpha", "labels": ["flow-a"]},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == (
+        "Access token is not valid for this experience."
+    )
+
+
 def test_ingest_text_and_search_with_label_scope(client) -> None:
-    client.app.dependency_overrides[get_rag_service] = (
-        lambda: RagService(
-            LocalPostgresRagStrategy(embeddings=FakeEmbeddingProvider())
-        )
+    client.app.dependency_overrides[get_rag_service] = lambda: RagService(
+        LocalPostgresRagStrategy(embeddings=FakeEmbeddingProvider())
     )
     try:
         headers = access_headers(client, "rag-api")
@@ -104,10 +117,8 @@ def test_ingest_text_and_search_with_label_scope(client) -> None:
 
 
 def test_rag_ingest_rejects_missing_content(client) -> None:
-    client.app.dependency_overrides[get_rag_service] = (
-        lambda: RagService(
-            LocalPostgresRagStrategy(embeddings=FakeEmbeddingProvider())
-        )
+    client.app.dependency_overrides[get_rag_service] = lambda: RagService(
+        LocalPostgresRagStrategy(embeddings=FakeEmbeddingProvider())
     )
     try:
         headers = access_headers(client, "rag-missing-content")

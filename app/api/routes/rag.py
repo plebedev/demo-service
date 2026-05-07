@@ -7,8 +7,9 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_access_token
+from app.api.deps import require_experience_access
 from app.core.config import Settings, get_settings
+from app.core.experiences import ExperienceId
 from app.db.session import get_db_session
 from app.schemas.rag import (
     RagDocumentIngestResponse,
@@ -22,7 +23,7 @@ from app.services.rag.strategy import RagService
 router = APIRouter(
     prefix="/api/rag",
     tags=["rag"],
-    dependencies=[Depends(get_current_access_token)],
+    dependencies=[Depends(require_experience_access(ExperienceId.RAG_DEMO))],
 )
 
 
