@@ -1,4 +1,4 @@
-"""Protected endpoints for local RAG document ingestion and search."""
+"""Protected endpoints for RAG document ingestion and search."""
 
 from __future__ import annotations
 
@@ -16,9 +16,8 @@ from app.schemas.rag import (
     RagSearchResponse,
     RagSearchResultResponse,
 )
-from app.services.embeddings import EmbeddingProvider, build_embedding_provider
-from app.services.rag_ingestion import RagIngestionService
-from app.services.rag_store import RagStore
+from app.services.rag.factory import build_rag_service
+from app.services.rag.strategy import RagService
 
 router = APIRouter(
     prefix="/api/rag",
@@ -27,11 +26,12 @@ router = APIRouter(
 )
 
 
-def get_rag_embedding_provider(
+def get_rag_service(
+    db: Session = Depends(get_db_session),
     settings: Settings = Depends(get_settings),
-) -> EmbeddingProvider:
-    """Build the request-scoped embedding provider."""
-    return build_embedding_provider(settings)
+) -> RagService:
+    """Build the request-scoped RAG service for the active backend."""
+    return build_rag_service(db, settings)
 
 
 @router.post(
@@ -47,12 +47,11 @@ async def ingest_rag_document_route(
     file: Annotated[UploadFile | None, File()] = None,
     db: Session = Depends(get_db_session),
     settings: Settings = Depends(get_settings),
-    embeddings: EmbeddingProvider = Depends(get_rag_embedding_provider),
+    rag: RagService = Depends(get_rag_service),
 ) -> RagDocumentIngestResponse:
     """Chunk, embed, and persist one text/PDF document under labels."""
-    service = RagIngestionService(store=RagStore(), embeddings=embeddings)
     try:
-        result = await service.ingest_document(
+        result = await rag.ingest_document(
             db,
             settings=settings,
             labels=labels,
@@ -85,27 +84,17 @@ def search_rag_chunks_route(
     payload: RagSearchRequest,
     db: Session = Depends(get_db_session),
     settings: Settings = Depends(get_settings),
-    embeddings: EmbeddingProvider = Depends(get_rag_embedding_provider),
+    rag: RagService = Depends(get_rag_service),
 ) -> RagSearchResponse:
     """Search nearest chunks within the requested labels."""
     try:
-        store = RagStore()
-        if db.get_bind().dialect.name == "oracle":
-            results = store.search_chunks_with_oracle_query(
-                db,
-                labels=payload.labels,
-                query=payload.query,
-                oracle_model_name=settings.rag_oracle_embedding_model,
-                limit=payload.limit,
-            )
-        else:
-            query_embedding = embeddings.embed([payload.query])[0]
-            results = store.search_chunks(
-                db,
-                labels=payload.labels,
-                embedding=query_embedding,
-                limit=payload.limit,
-            )
+        results = rag.search(
+            db,
+            settings=settings,
+            labels=payload.labels,
+            query=payload.query,
+            limit=payload.limit,
+        )
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)

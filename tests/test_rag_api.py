@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-from app.api.routes.rag import get_rag_embedding_provider
+from app.api.routes.rag import get_rag_service
 from app.core.config import get_settings
-from app.services.rag_store import EMBEDDING_DIMENSIONS
+from app.services.rag.local_postgres import LocalPostgresRagStrategy
+from app.services.rag.models import EMBEDDING_DIMENSIONS
+from app.services.rag.strategy import RagService
 
 
 class FakeEmbeddingProvider:
@@ -52,7 +54,11 @@ def test_rag_endpoints_require_access_token(client) -> None:
 
 
 def test_ingest_text_and_search_with_label_scope(client) -> None:
-    client.app.dependency_overrides[get_rag_embedding_provider] = FakeEmbeddingProvider
+    client.app.dependency_overrides[get_rag_service] = (
+        lambda: RagService(
+            LocalPostgresRagStrategy(embeddings=FakeEmbeddingProvider())
+        )
+    )
     try:
         headers = access_headers(client, "rag-api")
 
@@ -94,11 +100,15 @@ def test_ingest_text_and_search_with_label_scope(client) -> None:
         assert results[0]["source"] == "alpha.txt"
         assert "beta" not in results[0]["chunk_text"]
     finally:
-        client.app.dependency_overrides.pop(get_rag_embedding_provider, None)
+        client.app.dependency_overrides.pop(get_rag_service, None)
 
 
 def test_rag_ingest_rejects_missing_content(client) -> None:
-    client.app.dependency_overrides[get_rag_embedding_provider] = FakeEmbeddingProvider
+    client.app.dependency_overrides[get_rag_service] = (
+        lambda: RagService(
+            LocalPostgresRagStrategy(embeddings=FakeEmbeddingProvider())
+        )
+    )
     try:
         headers = access_headers(client, "rag-missing-content")
 
@@ -113,7 +123,7 @@ def test_rag_ingest_rejects_missing_content(client) -> None:
             "Provide either input_text or a text/PDF file."
         )
     finally:
-        client.app.dependency_overrides.pop(get_rag_embedding_provider, None)
+        client.app.dependency_overrides.pop(get_rag_service, None)
 
 
 def test_default_oracle_rag_model_matches_loaded_model() -> None:

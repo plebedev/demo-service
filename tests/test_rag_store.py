@@ -1,19 +1,40 @@
-"""Tests for label-scoped RAG document persistence."""
+"""Tests for local pgvector RAG persistence."""
 
 from __future__ import annotations
+
+import asyncio
 
 import pytest
 from sqlalchemy import text
 
-from app.services.rag_store import EMBEDDING_DIMENSIONS, RagChunkInput, RagStore
+from app.core.config import get_settings
+from app.services.rag.local_postgres import LocalPostgresRagStrategy
+from app.services.rag.models import EMBEDDING_DIMENSIONS
 
 
-def embedding(first: float, second: float = 0.0) -> list[float]:
-    """Build a fixed-size test embedding."""
-    values = [0.0] * EMBEDDING_DIMENSIONS
-    values[0] = first
-    values[1] = second
-    return values
+class FakeEmbeddingProvider:
+    """Deterministic embeddings for local strategy tests."""
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        return [self._embed_one(text) for text in texts]
+
+    def _embed_one(self, value: str) -> list[float]:
+        embedding = [0.0] * EMBEDDING_DIMENSIONS
+        if "beta" in value.lower():
+            embedding[1] = 1.0
+        elif "shared" in value.lower():
+            embedding[0] = 0.8
+            embedding[1] = 0.2
+        else:
+            embedding[0] = 1.0
+        return embedding
+
+
+class BadEmbeddingProvider:
+    """Embedding provider returning the wrong dimensionality."""
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        return [[0.0, 1.0] for _ in texts]
 
 
 def test_pgvector_extension_and_rag_tables_are_migrated(db_session) -> None:
@@ -43,83 +64,70 @@ def test_pgvector_extension_and_rag_tables_are_migrated(db_session) -> None:
 
 
 def test_search_chunks_is_constrained_to_requested_labels(db_session) -> None:
-    store = RagStore()
+    settings = get_settings()
+    strategy = LocalPostgresRagStrategy(embeddings=FakeEmbeddingProvider())
 
-    alpha_document = store.create_document(
-        db_session,
-        source="alpha.txt",
-        title="Alpha",
-        labels=["Flow-A"],
-        chunks=[
-            RagChunkInput(
-                chunk_text="alpha relevant chunk",
-                embedding=embedding(1.0),
-                chunk_index=0,
-            )
-        ],
+    alpha = asyncio.run(
+        strategy.ingest_document(
+            db_session,
+            settings=settings,
+            source="alpha.txt",
+            title="Alpha",
+            labels=["Flow-A"],
+            input_text="alpha relevant chunk",
+            file=None,
+        )
     )
-    beta_document = store.create_document(
-        db_session,
-        source="beta.txt",
-        title="Beta",
-        labels=["Flow-B"],
-        chunks=[
-            RagChunkInput(
-                chunk_text="beta should not leak into flow a",
-                embedding=embedding(1.0),
-                chunk_index=0,
-            )
-        ],
+    beta = asyncio.run(
+        strategy.ingest_document(
+            db_session,
+            settings=settings,
+            source="beta.txt",
+            title="Beta",
+            labels=["Flow-B"],
+            input_text="beta should not leak into flow a",
+            file=None,
+        )
     )
-    shared_document = store.create_document(
-        db_session,
-        source="shared.txt",
-        title="Shared",
-        labels=["Flow-A", "Flow-C"],
-        chunks=[
-            RagChunkInput(
-                chunk_text="shared flow a context",
-                embedding=embedding(0.8, 0.2),
-                chunk_index=0,
-            )
-        ],
+    shared = asyncio.run(
+        strategy.ingest_document(
+            db_session,
+            settings=settings,
+            source="shared.txt",
+            title="Shared",
+            labels=["Flow-A", "Flow-C"],
+            input_text="shared flow a context",
+            file=None,
+        )
     )
-    db_session.commit()
 
-    results = store.search_chunks(
+    results = strategy.search(
         db_session,
+        settings=settings,
         labels=["flow-a"],
-        embedding=embedding(1.0),
+        query="alpha question",
         limit=10,
     )
 
     document_ids = {result.document_id for result in results}
-    assert alpha_document.id in document_ids
-    assert shared_document.id in document_ids
-    assert beta_document.id not in document_ids
+    assert alpha.document_id in document_ids
+    assert shared.document_id in document_ids
+    assert beta.document_id not in document_ids
     assert all("beta" not in result.chunk_text for result in results)
 
 
-def test_store_rejects_wrong_embedding_dimensions(db_session) -> None:
-    store = RagStore()
+def test_local_strategy_rejects_wrong_embedding_dimensions(db_session) -> None:
+    strategy = LocalPostgresRagStrategy(embeddings=BadEmbeddingProvider())
 
     with pytest.raises(ValueError, match="384 dimensions"):
-        store.create_document(
-            db_session,
-            source="bad.txt",
-            labels=["flow-a"],
-            chunks=[
-                RagChunkInput(
-                    chunk_text="bad vector",
-                    embedding=[0.0, 1.0],
-                    chunk_index=0,
-                )
-            ],
-        )
-
-    with pytest.raises(ValueError, match="384 dimensions"):
-        store.search_chunks(
-            db_session,
-            labels=["flow-a"],
-            embedding=[0.0, 1.0],
+        asyncio.run(
+            strategy.ingest_document(
+                db_session,
+                settings=get_settings(),
+                source="bad.txt",
+                title=None,
+                labels=["flow-a"],
+                input_text="bad vector",
+                file=None,
+            )
         )

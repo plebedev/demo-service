@@ -398,6 +398,13 @@ search before adding frontend UI. They accept pasted text, `.txt` files, and
 PDFs with extractable text. Images, OCR-only PDFs, audio/video, and web lookup
 remain outside the demo guardrails.
 
+The backend binds a RAG implementation at the service boundary:
+
+- local Postgres uses app-side chunking, Ollama embeddings, and pgvector search
+- Oracle uses native `VECTOR_CHUNKS`, `VECTOR_EMBEDDING`, and vector search
+
+The public API stays the same across environments.
+
 Create an invite code, redeem it, and export the token:
 
 ```bash
@@ -574,6 +581,11 @@ Run the load SQL through SQLcl when scripting setup:
 ```bash
 sql APP_RW/'<password>'@'<dsn>' @load_minilm.sql
 ```
+
+Once the Oracle model and migrations are in place, the same protected RAG API
+works against Oracle. Ingestion sends extracted text to Oracle `VECTOR_CHUNKS`,
+stores each chunk with `VECTOR_EMBEDDING(MINILM_L12_V2 USING ... AS DATA)`, and
+search embeds the query with the same model inside Oracle.
 
 ## Alembic
 

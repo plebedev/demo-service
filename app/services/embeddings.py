@@ -7,7 +7,7 @@ from typing import Protocol
 from urllib import error, request
 
 from app.core.config import Settings
-from app.services.rag_store import EMBEDDING_DIMENSIONS
+from app.services.rag.models import EMBEDDING_DIMENSIONS
 
 
 class EmbeddingProvider(Protocol):
