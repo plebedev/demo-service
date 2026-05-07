@@ -52,6 +52,17 @@ class RagStrategy(Protocol):
     ) -> list[RagSearchResult]:
         """Search chunks within the requested labels."""
 
+    def search_persona_documents(
+        self,
+        session: Session,
+        *,
+        settings: Settings,
+        persona_id: int,
+        query: str,
+        limit: int,
+    ) -> list[RagSearchResult]:
+        """Search chunks linked to one persona."""
+
 
 class RagService:
     """Use-case facade for protected RAG APIs."""
@@ -111,6 +122,24 @@ class RagService:
             session,
             settings=settings,
             labels=labels,
+            query=query,
+            limit=limit,
+        )
+
+    def search_persona_documents(
+        self,
+        session: Session,
+        *,
+        settings: Settings,
+        persona_id: int,
+        query: str,
+        limit: int,
+    ) -> list[RagSearchResult]:
+        """Search chunks linked to one persona."""
+        return self.strategy.search_persona_documents(
+            session,
+            settings=settings,
+            persona_id=persona_id,
             query=query,
             limit=limit,
         )

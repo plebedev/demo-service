@@ -101,3 +101,46 @@ class RagPersonaDocumentIngestResponse(BaseModel):
 
     document: RagPersonaDocumentResponse
     reused_existing_document: bool
+
+
+class RagConversationCreateRequest(BaseModel):
+    """Payload for creating a RAG chat conversation."""
+
+    persona_id: int
+    title: str | None = Field(default=None, max_length=255)
+
+
+class RagMessageResponse(BaseModel):
+    """Stored RAG conversation message."""
+
+    id: int
+    role: str
+    content: str
+    turn_index: int
+    metadata: str | None
+    created_at: datetime
+
+
+class RagConversationResponse(BaseModel):
+    """Serialized RAG conversation summary."""
+
+    id: int
+    persona_id: int | None
+    persona_name: str | None
+    title: str | None
+    status: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class RagConversationListResponse(BaseModel):
+    """List wrapper for tenant-scoped RAG conversations."""
+
+    conversations: list[RagConversationResponse]
+
+
+class RagConversationDetailResponse(BaseModel):
+    """Conversation with stored messages."""
+
+    conversation: RagConversationResponse
+    messages: list[RagMessageResponse]

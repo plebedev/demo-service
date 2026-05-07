@@ -141,6 +141,54 @@ class OracleNativeRagStrategy:
         ).mappings()
         return [self._search_result(row) for row in rows]
 
+    def search_persona_documents(
+        self,
+        session: Session,
+        *,
+        settings: Settings,
+        persona_id: int,
+        query: str,
+        limit: int,
+    ) -> list[RagSearchResult]:
+        """Embed the query and search only chunks linked to one persona."""
+        if persona_id < 1:
+            raise ValueError("RAG persona id must be positive.")
+        if not query.strip():
+            raise ValueError("RAG search query cannot be empty.")
+        if limit < 1:
+            raise ValueError("Search limit must be at least 1.")
+
+        model_name = self.repository.oracle_model_name(
+            settings.rag_oracle_embedding_model
+        )
+        sql = text(
+            f"""
+            SELECT
+                c.id AS chunk_id,
+                d.id AS document_id,
+                d.source AS source,
+                d.title AS title,
+                c.chunk_index AS chunk_index,
+                c.chunk_text AS chunk_text,
+                VECTOR_DISTANCE(
+                    c.embedding,
+                    VECTOR_EMBEDDING({model_name} USING :query AS DATA),
+                    COSINE
+                ) AS distance
+            FROM rag_document_chunks c
+            JOIN rag_documents d ON d.id = c.document_id
+            JOIN rag_persona_documents pd ON pd.document_id = d.id
+            WHERE pd.persona_id = :persona_id
+            ORDER BY distance ASC
+            FETCH FIRST :limit ROWS ONLY
+            """
+        )
+        rows = session.execute(
+            sql,
+            {"query": query, "persona_id": persona_id, "limit": limit},
+        ).mappings()
+        return [self._search_result(row) for row in rows]
+
     def _insert_oracle_chunks(
         self,
         session: Session,

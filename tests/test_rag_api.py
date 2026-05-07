@@ -95,6 +95,12 @@ def test_rag_endpoints_reject_messy_notes_experience_token(client) -> None:
         "Access token is not valid for this experience."
     )
 
+    conversations = client.get("/api/rag/conversations", headers=headers)
+    assert conversations.status_code == 403
+    assert conversations.json()["detail"] == (
+        "Access token is not valid for this experience."
+    )
+
 
 def test_rag_persona_crud_is_scoped_to_invitation_code(client) -> None:
     headers = access_headers(client, "rag-persona-a")
@@ -229,6 +235,57 @@ def test_rag_persona_cross_invitation_access_does_not_leak(client) -> None:
     assert owner_fetch.json()["name"] == "Private Helper"
 
 
+def test_rag_conversations_are_scoped_to_invitation_code(client) -> None:
+    owner_headers = access_headers(client, "rag-conversation-owner")
+    other_headers = access_headers(client, "rag-conversation-other")
+    persona_id = create_persona(client, owner_headers, "Policy Helper")
+
+    created = client.post(
+        "/api/rag/conversations",
+        headers=owner_headers,
+        json={"persona_id": persona_id, "title": "Policy chat"},
+    )
+    assert created.status_code == 201
+    created_payload = created.json()
+    assert created_payload["persona_id"] == persona_id
+    assert created_payload["persona_name"] == "Policy Helper"
+    assert created_payload["title"] == "Policy chat"
+    conversation_id = created_payload["id"]
+
+    owner_list = client.get("/api/rag/conversations", headers=owner_headers)
+    assert owner_list.status_code == 200
+    assert [item["id"] for item in owner_list.json()["conversations"]] == [
+        conversation_id
+    ]
+
+    detail = client.get(
+        f"/api/rag/conversations/{conversation_id}",
+        headers=owner_headers,
+    )
+    assert detail.status_code == 200
+    assert detail.json()["conversation"]["id"] == conversation_id
+    assert detail.json()["messages"] == []
+
+    other_list = client.get("/api/rag/conversations", headers=other_headers)
+    assert other_list.status_code == 200
+    assert other_list.json()["conversations"] == []
+
+    other_detail = client.get(
+        f"/api/rag/conversations/{conversation_id}",
+        headers=other_headers,
+    )
+    assert other_detail.status_code == 404
+    assert other_detail.json()["detail"] == "Conversation not found."
+
+    cross_persona_create = client.post(
+        "/api/rag/conversations",
+        headers=other_headers,
+        json={"persona_id": persona_id, "title": "Cross tenant attempt"},
+    )
+    assert cross_persona_create.status_code == 404
+    assert cross_persona_create.json()["detail"] == "Persona not found."
+
+
 def test_rag_persona_documents_are_scoped_and_reused(
     client,
     db_session,
@@ -352,6 +409,62 @@ def test_rag_persona_document_upload_requires_existing_persona(client) -> None:
 
         assert upload.status_code == 404
         assert upload.json()["detail"] == "Persona not found."
+    finally:
+        client.app.dependency_overrides.pop(get_rag_service, None)
+
+
+def test_persona_document_search_is_limited_to_linked_documents(
+    client,
+    db_session,
+) -> None:
+    service = RagService(LocalPostgresRagStrategy(embeddings=FakeEmbeddingProvider()))
+    client.app.dependency_overrides[get_rag_service] = lambda: service
+    try:
+        headers = access_headers(client, "rag-persona-search")
+        policy_persona_id = create_persona(client, headers, "Policy Helper")
+        pricing_persona_id = create_persona(client, headers, "Pricing Helper")
+
+        policy_upload = client.post(
+            f"/api/rag/personas/{policy_persona_id}/documents",
+            headers=headers,
+            data={
+                "source": "policy.txt",
+                "title": "Policy",
+                "input_text": "alpha renewal policy context",
+            },
+        )
+        assert policy_upload.status_code == 201
+
+        pricing_upload = client.post(
+            f"/api/rag/personas/{pricing_persona_id}/documents",
+            headers=headers,
+            data={
+                "source": "pricing.txt",
+                "title": "Pricing",
+                "input_text": "beta pricing policy context",
+            },
+        )
+        assert pricing_upload.status_code == 201
+
+        policy_results = service.search_persona_documents(
+            db_session,
+            settings=get_settings(),
+            persona_id=policy_persona_id,
+            query="beta pricing question",
+            limit=5,
+        )
+        assert [result.source for result in policy_results] == ["policy.txt"]
+        assert all("beta" not in result.chunk_text for result in policy_results)
+
+        pricing_results = service.search_persona_documents(
+            db_session,
+            settings=get_settings(),
+            persona_id=pricing_persona_id,
+            query="beta pricing question",
+            limit=5,
+        )
+        assert [result.source for result in pricing_results] == ["pricing.txt"]
+        assert all("beta" in result.chunk_text for result in pricing_results)
     finally:
         client.app.dependency_overrides.pop(get_rag_service, None)
 

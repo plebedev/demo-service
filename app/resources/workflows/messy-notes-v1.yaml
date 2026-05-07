@@ -18,7 +18,6 @@ agents:
       scope, keep the workflow bounded, and hand off only to configured agents.
       Do not drift into generic chat. If the notes are incomplete, surface that
       plainly instead of inventing missing facts.
-    temperature: 0.1
     max_tokens: 1200
     timeout: 30
     tools:
@@ -29,7 +28,7 @@ agents:
       - reconciler
   - role: extractor
     provider: anthropic
-    model: claude-3-5-haiku-latest
+    model: claude-haiku-4-5-20251001
     system_prompt: >
       Extract concrete facts, open questions, and conflicts from the persisted
       run input. Stay grounded in the provided notes and flag uncertainty
@@ -57,7 +56,6 @@ agents:
       Reconcile extracted findings into one consistent view of the messy notes.
       Call out disagreements, missing evidence, and assumptions that still need
       confirmation before a brief is finalized.
-    temperature: 0.0
     max_tokens: 1400
     timeout: 30
     tools:
@@ -68,7 +66,7 @@ agents:
       - brief_writer
   - role: brief_writer
     provider: anthropic
-    model: claude-3-5-sonnet-latest
+    model: claude-haiku-4-5-20251001
     system_prompt: >
       Write a concise structured brief from the reconciled notes. Keep the
       output practical, bounded, and honest about any unresolved questions.

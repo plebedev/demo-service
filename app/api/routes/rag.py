@@ -14,9 +14,20 @@ from app.core.config import Settings, get_settings
 from app.core.experiences import ExperienceId
 from app.core.security import AccessTokenClaims
 from app.db.session import get_db_session
-from app.models.rag import RagDocument, RagPersona, RagPersonaDocument
+from app.models.rag import (
+    RagConversation,
+    RagDocument,
+    RagMessage,
+    RagPersona,
+    RagPersonaDocument,
+)
 from app.schemas.rag import (
+    RagConversationCreateRequest,
+    RagConversationDetailResponse,
+    RagConversationListResponse,
+    RagConversationResponse,
     RagDocumentIngestResponse,
+    RagMessageResponse,
     RagPersonaDocumentIngestResponse,
     RagPersonaDocumentListResponse,
     RagPersonaDocumentResponse,
@@ -92,6 +103,34 @@ def _serialize_persona_document(
     )
 
 
+def _serialize_message(message: RagMessage) -> RagMessageResponse:
+    """Convert a stored RAG message into API shape."""
+    return RagMessageResponse(
+        id=message.id,
+        role=message.role,
+        content=message.content,
+        turn_index=message.turn_index,
+        metadata=message.metadata_serialized,
+        created_at=message.created_at,
+    )
+
+
+def _serialize_conversation(
+    conversation: RagConversation,
+) -> RagConversationResponse:
+    """Convert a stored RAG conversation into API shape."""
+    persona = conversation.persona
+    return RagConversationResponse(
+        id=conversation.id,
+        persona_id=conversation.persona_id,
+        persona_name=persona.name if persona is not None else None,
+        title=conversation.title,
+        status=conversation.status,
+        created_at=conversation.created_at,
+        updated_at=conversation.updated_at,
+    )
+
+
 def _get_active_persona_or_404(
     db: Session,
     *,
@@ -112,6 +151,27 @@ def _get_active_persona_or_404(
             detail="Persona not found.",
         )
     return persona
+
+
+def _get_conversation_or_404(
+    db: Session,
+    *,
+    conversation_id: int,
+    invitation_code_id: int,
+) -> RagConversation:
+    """Return one conversation in the caller's tenant namespace."""
+    conversation = db.scalar(
+        select(RagConversation).where(
+            RagConversation.id == conversation_id,
+            RagConversation.invitation_code_id == invitation_code_id,
+        )
+    )
+    if conversation is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Conversation not found.",
+        )
+    return conversation
 
 
 def _ensure_persona_name_available(
@@ -254,6 +314,78 @@ def delete_rag_persona_route(
     persona.is_active = False
     db.add(persona)
     db.commit()
+
+
+@router.get("/conversations", response_model=RagConversationListResponse)
+def list_rag_conversations_route(
+    claims: AccessTokenClaims = Depends(rag_access),
+    db: Session = Depends(get_db_session),
+) -> RagConversationListResponse:
+    """List conversations for the caller's invitation namespace."""
+    conversations = db.scalars(
+        select(RagConversation)
+        .where(RagConversation.invitation_code_id == claims.invitation_code_id)
+        .order_by(RagConversation.updated_at.desc(), RagConversation.id.desc())
+    ).all()
+    return RagConversationListResponse(
+        conversations=[
+            _serialize_conversation(conversation) for conversation in conversations
+        ]
+    )
+
+
+@router.post(
+    "/conversations",
+    response_model=RagConversationResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_rag_conversation_route(
+    payload: RagConversationCreateRequest,
+    claims: AccessTokenClaims = Depends(rag_access),
+    db: Session = Depends(get_db_session),
+) -> RagConversationResponse:
+    """Create a persona-scoped conversation in the caller's namespace."""
+    persona = _get_active_persona_or_404(
+        db,
+        persona_id=payload.persona_id,
+        invitation_code_id=claims.invitation_code_id,
+    )
+    conversation = RagConversation(
+        invitation_code_id=claims.invitation_code_id,
+        persona_id=persona.id,
+        title=_clean_optional_text(payload.title),
+        status="active",
+    )
+    db.add(conversation)
+    db.commit()
+    db.refresh(conversation)
+    return _serialize_conversation(conversation)
+
+
+@router.get(
+    "/conversations/{conversation_id}",
+    response_model=RagConversationDetailResponse,
+)
+def get_rag_conversation_route(
+    conversation_id: int,
+    claims: AccessTokenClaims = Depends(rag_access),
+    db: Session = Depends(get_db_session),
+) -> RagConversationDetailResponse:
+    """Return one conversation and its stored messages."""
+    conversation = _get_conversation_or_404(
+        db,
+        conversation_id=conversation_id,
+        invitation_code_id=claims.invitation_code_id,
+    )
+    messages = db.scalars(
+        select(RagMessage)
+        .where(RagMessage.conversation_id == conversation.id)
+        .order_by(RagMessage.turn_index, RagMessage.id)
+    ).all()
+    return RagConversationDetailResponse(
+        conversation=_serialize_conversation(conversation),
+        messages=[_serialize_message(message) for message in messages],
+    )
 
 
 @router.get(

@@ -156,7 +156,7 @@ async def _draft_personalized_email(
     invitation_code: InvitationCode,
     settings: Settings,
 ) -> InviteEmailContent:
-    from app.services.model_factory import create_model
+    from app.services.model_factory import create_model, create_provider_model_settings
     from app.workflows.config_models import WorkflowProvider
 
     provider = WorkflowProvider(settings.invite_email_draft_provider)
@@ -170,7 +170,12 @@ async def _draft_personalized_email(
             "invite code and simple start instructions. Keep the email concise."
         ),
         output_type=InviteEmailContent,
-        model_settings={"temperature": 0.3, "max_tokens": 700},
+        model_settings=create_provider_model_settings(
+            provider=provider,
+            timeout=None,
+            temperature=None,
+            max_tokens=700,
+        ),
     )
     base_url = settings.invite_email_base_url.rstrip("/")
     experience_id = _request_experience_id(invite_request)

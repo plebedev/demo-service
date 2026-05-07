@@ -12,10 +12,9 @@ import yaml  # type: ignore[import-untyped]
 
 from app.core.config import Settings
 from app.services.model_factory import (
-    build_model_settings,
     create_model,
+    create_model_settings,
     provider_is_implemented,
-    required_api_key_env_var,
 )
 from app.services.tool_registry import WorkflowToolRegistry, build_tool_registry
 from app.workflows.config_models import (
@@ -167,10 +166,7 @@ def _build_agent_runtime(
     if not provider_is_implemented(agent.provider):
         return None
 
-    try:
-        model = create_model(agent.provider, agent.model, settings)
-    except (ValueError, ImportError):
-        return None
+    model = create_model(agent.provider, agent.model, settings)
     return Agent(
         model=model,
         instructions=assemble_system_prompt(
@@ -179,5 +175,5 @@ def _build_agent_runtime(
         tools=[tool.to_pydantic_tool() for tool in tool_registry.resolve(agent.tools)],
         deps_type=WorkflowAgentDeps,
         output_type=str,
-        model_settings=build_model_settings(agent),
+        model_settings=create_model_settings(agent),
     )

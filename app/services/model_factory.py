@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from pydantic_ai.settings import ModelSettings
+from pydantic_ai import ModelSettings
 
 from app.core.config import Settings
 from app.workflows.config_models import (
@@ -87,22 +87,62 @@ def create_model(
     )
 
 
-def build_model_settings(
-    config: AgentWorkflowConfig | PostProcessorConfig,
+def create_provider_model_settings(
+    *,
+    provider: WorkflowProvider,
+    timeout: float | None,
+    temperature: float | None,
+    max_tokens: int | None,
 ) -> ModelSettings | None:
-    """Convert YAML knobs into PydanticAI model settings."""
-    if (
-        config.temperature is None
-        and config.max_tokens is None
-        and config.timeout is None
-    ):
+    """Create provider-specific PydanticAI model settings.
+
+    Anthropic prompt caching is required for configured Anthropic workflows.
+    OpenAI prompt caching is handled by the provider for eligible prompt prefixes,
+    so OpenAI only receives the generic runtime knobs configured in YAML.
+    """
+    if provider == WorkflowProvider.ANTHROPIC:
+        from pydantic_ai.models.anthropic import AnthropicModelSettings
+
+        anthropic_settings: AnthropicModelSettings = {
+            "anthropic_cache_instructions": True,
+            "anthropic_cache_tool_definitions": True,
+            "anthropic_cache_messages": True,
+        }
+        if temperature is not None:
+            anthropic_settings["temperature"] = temperature
+        if max_tokens is not None:
+            anthropic_settings["max_tokens"] = max_tokens
+        if timeout is not None:
+            anthropic_settings["timeout"] = timeout
+        return anthropic_settings
+
+    if temperature is None and max_tokens is None and timeout is None:
         return None
 
     settings: ModelSettings = {}
-    if config.temperature is not None:
-        settings["temperature"] = config.temperature
-    if config.max_tokens is not None:
-        settings["max_tokens"] = config.max_tokens
-    if config.timeout is not None:
-        settings["timeout"] = config.timeout
+    if temperature is not None:
+        settings["temperature"] = temperature
+    if max_tokens is not None:
+        settings["max_tokens"] = max_tokens
+    if timeout is not None:
+        settings["timeout"] = timeout
     return settings
+
+
+def create_model_settings(
+    config: AgentWorkflowConfig | PostProcessorConfig,
+) -> ModelSettings | None:
+    """Create model settings from YAML workflow configuration."""
+    return create_provider_model_settings(
+        provider=config.provider,
+        timeout=config.timeout,
+        temperature=config.temperature,
+        max_tokens=config.max_tokens,
+    )
+
+
+def build_model_settings(
+    config: AgentWorkflowConfig | PostProcessorConfig,
+) -> ModelSettings | None:
+    """Backward-compatible wrapper for provider-specific model settings."""
+    return create_model_settings(config)
