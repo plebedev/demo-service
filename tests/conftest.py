@@ -31,7 +31,7 @@ def _sqlalchemy_database_url(container: PostgresContainer) -> str:
 def postgres_container() -> Iterator[PostgresContainer]:
     """Start a disposable Postgres container for migration and API tests."""
     container = PostgresContainer(
-        image="postgres:16-alpine",
+        image="pgvector/pgvector:pg16",
         username="demo_service",
         password="demo_service",
         dbname="demo_service",
@@ -115,6 +115,10 @@ def reset_database(
             text(
                 """
                 TRUNCATE TABLE
+                    rag_document_chunks,
+                    rag_document_labels,
+                    rag_labels,
+                    rag_documents,
                     sms_messages,
                     sms_conversations,
                     sms_opt_outs,
