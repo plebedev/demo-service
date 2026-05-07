@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from app.api.routes.rag import get_rag_service
 from app.core.config import get_settings
+from app.models.rag import RagDocument, RagDocumentChunk, RagPersonaDocument
 from app.services.rag.local_postgres import LocalPostgresRagStrategy
 from app.services.rag.models import EMBEDDING_DIMENSIONS
 from app.services.rag.strategy import RagService
@@ -43,6 +44,21 @@ def access_headers(client, code: str, label: str = "rag-demo") -> dict[str, str]
     return {"Authorization": f"Bearer {token}"}
 
 
+def create_persona(client, headers: dict[str, str], name: str = "Policy Helper") -> int:
+    """Create a RAG persona and return its id."""
+    response = client.post(
+        "/api/rag/personas",
+        headers=headers,
+        json={
+            "name": name,
+            "instructions": "Answer from uploaded policy documents.",
+            "capabilities": "Policy lookup",
+        },
+    )
+    assert response.status_code == 201
+    return int(response.json()["id"])
+
+
 def test_rag_endpoints_require_access_token(client) -> None:
     response = client.post(
         "/api/rag/search",
@@ -70,6 +86,12 @@ def test_rag_endpoints_reject_messy_notes_experience_token(client) -> None:
     personas = client.get("/api/rag/personas", headers=headers)
     assert personas.status_code == 403
     assert personas.json()["detail"] == (
+        "Access token is not valid for this experience."
+    )
+
+    documents = client.get("/api/rag/personas/1/documents", headers=headers)
+    assert documents.status_code == 403
+    assert documents.json()["detail"] == (
         "Access token is not valid for this experience."
     )
 
@@ -205,6 +227,133 @@ def test_rag_persona_cross_invitation_access_does_not_leak(client) -> None:
     owner_fetch = client.get(f"/api/rag/personas/{persona_id}", headers=owner_headers)
     assert owner_fetch.status_code == 200
     assert owner_fetch.json()["name"] == "Private Helper"
+
+
+def test_rag_persona_documents_are_scoped_and_reused(
+    client,
+    db_session,
+) -> None:
+    client.app.dependency_overrides[get_rag_service] = lambda: RagService(
+        LocalPostgresRagStrategy(embeddings=FakeEmbeddingProvider())
+    )
+    try:
+        owner_headers = access_headers(client, "rag-doc-owner")
+        other_headers = access_headers(client, "rag-doc-other")
+        first_persona_id = create_persona(client, owner_headers, "Policy Helper")
+        second_persona_id = create_persona(client, owner_headers, "Renewal Helper")
+
+        first_upload = client.post(
+            f"/api/rag/personas/{first_persona_id}/documents",
+            headers=owner_headers,
+            data={
+                "source": "policy.txt",
+                "title": "Policy",
+                "input_text": "alpha renewal policy context",
+            },
+        )
+        assert first_upload.status_code == 201
+        first_payload = first_upload.json()
+        assert first_payload["reused_existing_document"] is False
+        document_id = first_payload["document"]["document_id"]
+        assert first_payload["document"]["chunk_count"] == 1
+
+        repeated_upload = client.post(
+            f"/api/rag/personas/{first_persona_id}/documents",
+            headers=owner_headers,
+            data={
+                "source": "policy-renamed.txt",
+                "title": "Policy Renamed",
+                "input_text": "alpha renewal policy context",
+            },
+        )
+        assert repeated_upload.status_code == 201
+        repeated_payload = repeated_upload.json()
+        assert repeated_payload["reused_existing_document"] is True
+        assert repeated_payload["document"]["document_id"] == document_id
+
+        second_upload = client.post(
+            f"/api/rag/personas/{second_persona_id}/documents",
+            headers=owner_headers,
+            data={
+                "source": "policy-copy.txt",
+                "title": "Policy Copy",
+                "input_text": "alpha renewal policy context",
+            },
+        )
+        assert second_upload.status_code == 201
+        assert second_upload.json()["reused_existing_document"] is True
+        assert second_upload.json()["document"]["document_id"] == document_id
+
+        owner_list = client.get(
+            f"/api/rag/personas/{first_persona_id}/documents",
+            headers=owner_headers,
+        )
+        assert owner_list.status_code == 200
+        assert [item["document_id"] for item in owner_list.json()["documents"]] == [
+            document_id
+        ]
+
+        other_list = client.get(
+            f"/api/rag/personas/{first_persona_id}/documents",
+            headers=other_headers,
+        )
+        assert other_list.status_code == 404
+        assert other_list.json()["detail"] == "Persona not found."
+
+        other_unlink = client.delete(
+            f"/api/rag/personas/{first_persona_id}/documents/{document_id}",
+            headers=other_headers,
+        )
+        assert other_unlink.status_code == 404
+        assert other_unlink.json()["detail"] == "Persona not found."
+
+        assert db_session.query(RagDocument).count() == 1
+        assert db_session.query(RagDocumentChunk).count() == 1
+        assert db_session.query(RagPersonaDocument).count() == 2
+
+        unlink = client.delete(
+            f"/api/rag/personas/{first_persona_id}/documents/{document_id}",
+            headers=owner_headers,
+        )
+        assert unlink.status_code == 204
+
+        db_session.expire_all()
+        assert db_session.query(RagDocument).count() == 1
+        assert db_session.query(RagDocumentChunk).count() == 1
+        assert db_session.query(RagPersonaDocument).count() == 1
+
+        remaining = client.get(
+            f"/api/rag/personas/{second_persona_id}/documents",
+            headers=owner_headers,
+        )
+        assert remaining.status_code == 200
+        assert [item["document_id"] for item in remaining.json()["documents"]] == [
+            document_id
+        ]
+    finally:
+        client.app.dependency_overrides.pop(get_rag_service, None)
+
+
+def test_rag_persona_document_upload_requires_existing_persona(client) -> None:
+    client.app.dependency_overrides[get_rag_service] = lambda: RagService(
+        LocalPostgresRagStrategy(embeddings=FakeEmbeddingProvider())
+    )
+    try:
+        headers = access_headers(client, "rag-doc-missing-persona")
+
+        upload = client.post(
+            "/api/rag/personas/999/documents",
+            headers=headers,
+            data={
+                "source": "policy.txt",
+                "input_text": "alpha renewal policy context",
+            },
+        )
+
+        assert upload.status_code == 404
+        assert upload.json()["detail"] == "Persona not found."
+    finally:
+        client.app.dependency_overrides.pop(get_rag_service, None)
 
 
 def test_ingest_text_and_search_with_label_scope(client) -> None:
