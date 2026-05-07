@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
+import oracledb
 from fastapi import UploadFile
-from sqlalchemy import bindparam, text
-from sqlalchemy.dialects.oracle import CLOB
+from sqlalchemy import text
 from sqlalchemy.engine import RowMapping
 from sqlalchemy.orm import Session
 
@@ -238,12 +238,17 @@ class OracleNativeRagStrategy:
                 NORMALIZE ALL
             ) c
             """
-        ).bindparams(bindparam("document_text", type_=CLOB()))
+        )
+        raw_conn = session.connection().connection.driver_connection
+        if raw_conn is None:
+            raise RuntimeError("Expected an oracledb connection but got None")
+        clob = raw_conn.createlob(oracledb.DB_TYPE_CLOB)
+        clob.write(document_text)
         session.execute(
             sql,
             {
                 "document_id": document_id,
-                "document_text": document_text,
+                "document_text": clob,
             },
         )
         count = session.execute(
