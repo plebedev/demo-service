@@ -102,7 +102,9 @@ class RagIngestionService:
             )
             chunk_count = len(text_chunk_inputs)
         else:
-            embeddings = self.embeddings.embed([chunk.text for chunk in prepared_chunks])
+            embeddings = self.embeddings.embed(
+                [chunk.text for chunk in prepared_chunks]
+            )
             chunk_inputs = [
                 RagChunkInput(
                     chunk_text=chunk.text,
