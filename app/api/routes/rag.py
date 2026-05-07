@@ -103,7 +103,7 @@ def _get_active_persona_or_404(
         select(RagPersona).where(
             RagPersona.id == persona_id,
             RagPersona.invitation_code_id == invitation_code_id,
-            RagPersona.is_active.is_(True),
+            RagPersona.is_active == True,
         )
     )
     if persona is None:
@@ -125,7 +125,7 @@ def _ensure_persona_name_available(
     query = select(RagPersona.id).where(
         RagPersona.invitation_code_id == invitation_code_id,
         RagPersona.name_key == name_key,
-        RagPersona.is_active.is_(True),
+        RagPersona.is_active == True,
     )
     if persona_id is not None:
         query = query.where(RagPersona.id != persona_id)
@@ -147,7 +147,7 @@ def list_rag_personas_route(
         select(RagPersona)
         .where(
             RagPersona.invitation_code_id == claims.invitation_code_id,
-            RagPersona.is_active.is_(True),
+            RagPersona.is_active == True,
         )
         .order_by(func.lower(RagPersona.name), RagPersona.id)
     ).all()
