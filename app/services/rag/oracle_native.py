@@ -10,8 +10,11 @@ from sqlalchemy.engine import RowMapping
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
-from app.services.rag.extraction import combine_sections, extract_sections
-from app.services.rag.models import RagDocumentResult, RagSearchResult
+from app.services.rag.models import (
+    PreparedRagDocument,
+    RagDocumentResult,
+    RagSearchResult,
+)
 from app.services.rag.repository import RagDocumentRepository
 
 
@@ -33,25 +36,39 @@ class OracleNativeRagStrategy:
         file: UploadFile | None,
     ) -> RagDocumentResult:
         """Extract text, then chunk and embed inside Oracle."""
-        sections, resolved_source = await extract_sections(
+        prepared = await self.repository.prepare_document(
             input_text=input_text,
             file=file,
-            fallback_source=source,
+            source=source,
+            title=title,
         )
-        document_text = combine_sections(sections)
-        if not document_text:
-            raise ValueError("No extractable text was available for RAG ingestion.")
+        return self.create_document_from_prepared(
+            session,
+            settings=settings,
+            prepared=prepared,
+            labels=labels,
+        )
 
+    def create_document_from_prepared(
+        self,
+        session: Session,
+        *,
+        settings: Settings,
+        prepared: PreparedRagDocument,
+        labels: list[str],
+    ) -> RagDocumentResult:
+        """Chunk and embed an already extracted document inside Oracle."""
         document = self.repository.create_document(
             session,
-            source=resolved_source,
-            title=title,
+            source=prepared.source,
+            title=prepared.title,
             labels=labels,
+            content_sha256=prepared.content_sha256,
         )
         chunk_count = self._insert_oracle_chunks(
             session,
             document_id=document.id,
-            document_text=document_text,
+            document_text=prepared.combined_text,
             settings=settings,
         )
         session.commit()

@@ -12,9 +12,9 @@ from sqlalchemy.orm import Session
 from app.core.config import Settings
 from app.services.embeddings import EmbeddingProvider
 from app.services.rag.chunking import build_rag_chunks
-from app.services.rag.extraction import extract_sections
 from app.services.rag.models import (
     EMBEDDING_DIMENSIONS,
+    PreparedRagDocument,
     RagDocumentResult,
     RagSearchResult,
     RagVectorChunk,
@@ -46,13 +46,30 @@ class LocalPostgresRagStrategy:
         file: UploadFile | None,
     ) -> RagDocumentResult:
         """Extract, chunk locally, embed with Ollama, and store pgvector chunks."""
-        sections, resolved_source = await extract_sections(
+        prepared = await self.repository.prepare_document(
             input_text=input_text,
             file=file,
-            fallback_source=source,
+            source=source,
+            title=title,
         )
+        return self.create_document_from_prepared(
+            session,
+            settings=settings,
+            prepared=prepared,
+            labels=labels,
+        )
+
+    def create_document_from_prepared(
+        self,
+        session: Session,
+        *,
+        settings: Settings,
+        prepared: PreparedRagDocument,
+        labels: list[str],
+    ) -> RagDocumentResult:
+        """Chunk, embed, and persist an already extracted document."""
         prepared_chunks = build_rag_chunks(
-            sections,
+            prepared.sections,
             chunk_size=settings.rag_chunk_size,
             chunk_overlap=settings.rag_chunk_overlap,
         )
@@ -75,9 +92,10 @@ class LocalPostgresRagStrategy:
 
         document = self.repository.create_document(
             session,
-            source=resolved_source,
-            title=title,
+            source=prepared.source,
+            title=prepared.title,
             labels=labels,
+            content_sha256=prepared.content_sha256,
         )
         for chunk in chunks:
             self._insert_chunk(session, document.id, chunk)

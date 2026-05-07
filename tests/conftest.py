@@ -116,7 +116,11 @@ def reset_database(
                 """
                 TRUNCATE TABLE
                     rag_document_chunks,
+                    rag_messages,
+                    rag_conversations,
+                    rag_persona_documents,
                     rag_document_labels,
+                    rag_personas,
                     rag_labels,
                     rag_documents,
                     sms_messages,

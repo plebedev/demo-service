@@ -2,7 +2,17 @@
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Identity, Integer, String, Text, func
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Identity,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -65,6 +75,150 @@ class RagDocumentLabel(Base):
     label_id: Mapped[int] = mapped_column(
         ForeignKey("rag_labels.id", ondelete="CASCADE"), primary_key=True
     )
+
+
+class RagPersona(Base):
+    """Tenant-scoped assistant persona for the RAG demo."""
+
+    __tablename__ = "rag_personas"
+    __table_args__ = (
+        UniqueConstraint(
+            "invitation_code_id",
+            "name_key",
+            "is_active",
+            name="uq_rag_personas_invitation_name_active",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(
+        Integer, Identity(), primary_key=True, autoincrement=True
+    )
+    invitation_code_id: Mapped[int] = mapped_column(
+        ForeignKey("invitation_codes.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    name_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    instructions: Mapped[str] = mapped_column(Text(), nullable=False)
+    capabilities_serialized: Mapped[str] = mapped_column(
+        "capabilities_json", Text(), nullable=True
+    )
+    tool_config_serialized: Mapped[str] = mapped_column(
+        "tool_config_json", Text(), nullable=True
+    )
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="true", nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    documents: Mapped[list["RagPersonaDocument"]] = relationship(
+        back_populates="persona", cascade="all, delete-orphan"
+    )
+    conversations: Mapped[list["RagConversation"]] = relationship(
+        back_populates="persona"
+    )
+
+
+class RagPersonaDocument(Base):
+    """Join row linking a persona to a reusable source document."""
+
+    __tablename__ = "rag_persona_documents"
+
+    persona_id: Mapped[int] = mapped_column(
+        ForeignKey("rag_personas.id", ondelete="CASCADE"), primary_key=True
+    )
+    document_id: Mapped[int] = mapped_column(
+        ForeignKey("rag_documents.id", ondelete="CASCADE"), primary_key=True
+    )
+    display_name: Mapped[str] = mapped_column(String(255), nullable=True)
+    source: Mapped[str] = mapped_column(String(512), nullable=True)
+    metadata_serialized: Mapped[str] = mapped_column(
+        "metadata_json", Text(), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    persona: Mapped[RagPersona] = relationship(back_populates="documents")
+    document: Mapped[RagDocument] = relationship()
+
+
+class RagConversation(Base):
+    """Stored RAG conversation scoped to one invitation namespace."""
+
+    __tablename__ = "rag_conversations"
+
+    id: Mapped[int] = mapped_column(
+        Integer, Identity(), primary_key=True, autoincrement=True
+    )
+    invitation_code_id: Mapped[int] = mapped_column(
+        ForeignKey("invitation_codes.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    persona_id: Mapped[int] = mapped_column(
+        ForeignKey("rag_personas.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    title: Mapped[str] = mapped_column(String(255), nullable=True)
+    status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="active", server_default="active"
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    persona: Mapped["RagPersona"] = relationship(back_populates="conversations")
+    messages: Mapped[list["RagMessage"]] = relationship(
+        back_populates="conversation", cascade="all, delete-orphan"
+    )
+
+
+class RagMessage(Base):
+    """Stored message for a future RAG chat conversation."""
+
+    __tablename__ = "rag_messages"
+    __table_args__ = (
+        UniqueConstraint(
+            "conversation_id",
+            "turn_index",
+            name="uq_rag_messages_conversation_turn_index",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(
+        Integer, Identity(), primary_key=True, autoincrement=True
+    )
+    conversation_id: Mapped[int] = mapped_column(
+        ForeignKey("rag_conversations.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    role: Mapped[str] = mapped_column(String(32), nullable=False)
+    content: Mapped[str] = mapped_column(Text(), nullable=False)
+    turn_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    metadata_serialized: Mapped[str] = mapped_column(
+        "metadata_json", Text(), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    conversation: Mapped[RagConversation] = relationship(back_populates="messages")
 
 
 class RagDocumentChunk(Base):

@@ -49,6 +49,18 @@ class RagDocumentResult:
     title: str | None
     labels: list[str]
     chunk_count: int
+    reused_existing_document: bool = False
+
+
+@dataclass(frozen=True)
+class PreparedRagDocument:
+    """Extracted document text ready for persistence and embedding."""
+
+    source: str
+    title: str | None
+    content_sha256: str
+    sections: list[ExtractedSection]
+    combined_text: str
 
 
 @dataclass(frozen=True)

@@ -8,7 +8,11 @@ from fastapi import UploadFile
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
-from app.services.rag.models import RagDocumentResult, RagSearchResult
+from app.services.rag.models import (
+    PreparedRagDocument,
+    RagDocumentResult,
+    RagSearchResult,
+)
 
 
 class RagStrategy(Protocol):
@@ -26,6 +30,16 @@ class RagStrategy(Protocol):
         file: UploadFile | None,
     ) -> RagDocumentResult:
         """Ingest one supported document and persist searchable chunks."""
+
+    def create_document_from_prepared(
+        self,
+        session: Session,
+        *,
+        settings: Settings,
+        prepared: PreparedRagDocument,
+        labels: list[str],
+    ) -> RagDocumentResult:
+        """Persist and embed an already extracted document."""
 
     def search(
         self,
@@ -65,6 +79,22 @@ class RagService:
             title=title,
             input_text=input_text,
             file=file,
+        )
+
+    def create_document_from_prepared(
+        self,
+        session: Session,
+        *,
+        settings: Settings,
+        prepared: PreparedRagDocument,
+        labels: list[str],
+    ) -> RagDocumentResult:
+        """Persist and embed an already extracted document."""
+        return self.strategy.create_document_from_prepared(
+            session,
+            settings=settings,
+            prepared=prepared,
+            labels=labels,
         )
 
     def search(
