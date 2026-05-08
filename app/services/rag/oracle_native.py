@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 import oracledb
@@ -11,12 +12,17 @@ from sqlalchemy.engine import RowMapping
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
+from app.core.logging import log_event
 from app.services.rag.models import (
+    PreparedRagChunk,
     PreparedRagDocument,
     RagDocumentResult,
     RagSearchResult,
 )
 from app.services.rag.repository import RagDocumentRepository
+from app.services.text_tools import TextToolsClient
+
+logger = logging.getLogger(__name__)
 
 
 class OracleNativeRagStrategy:
@@ -66,11 +72,18 @@ class OracleNativeRagStrategy:
             labels=labels,
             content_sha256=prepared.content_sha256,
         )
-        chunk_count = self._insert_oracle_chunks(
+        chunk_count = self._insert_chunks(
             session,
             document_id=document.id,
-            document_text=prepared.combined_text,
+            prepared=prepared,
             settings=settings,
+        )
+        log_event(
+            logger,
+            "oracle_rag_chunks_inserted",
+            chunking_provider=settings.rag_oracle_chunking_provider,
+            document_id=document.id,
+            chunk_count=chunk_count,
         )
         session.commit()
 
@@ -190,6 +203,47 @@ class OracleNativeRagStrategy:
         ).mappings()
         return [self._search_result(row) for row in rows]
 
+    def _insert_chunks(
+        self,
+        session: Session,
+        *,
+        document_id: int,
+        prepared: PreparedRagDocument,
+        settings: Settings,
+    ) -> int:
+        provider = settings.rag_oracle_chunking_provider.strip().lower()
+        if provider == "oracle":
+            return self._insert_oracle_chunks(
+                session,
+                document_id=document_id,
+                document_text=prepared.combined_text,
+                settings=settings,
+            )
+        if provider == "rust":
+            if not settings.text_tools_enabled:
+                raise ValueError(
+                    "TEXT_TOOLS_ENABLED must be true when "
+                    "RAG_ORACLE_CHUNKING_PROVIDER=rust."
+                )
+            prepared_chunks = self._build_text_tools_chunks(
+                prepared,
+                settings=settings,
+            )
+            log_event(
+                logger,
+                "oracle_rag_text_tools_chunking_succeeded",
+                section_count=len(prepared.sections),
+                chunk_count=len(prepared_chunks),
+                text_tools_base_url=settings.text_tools_base_url,
+            )
+            return self._insert_prepared_chunks(
+                session,
+                document_id=document_id,
+                prepared_chunks=prepared_chunks,
+                settings=settings,
+            )
+        raise ValueError("RAG_ORACLE_CHUNKING_PROVIDER must be 'oracle' or 'rust'.")
+
     def _insert_oracle_chunks(
         self,
         session: Session,
@@ -262,6 +316,83 @@ class OracleNativeRagStrategy:
             {"document_id": document_id},
         ).scalar_one()
         return int(count)
+
+    def _build_text_tools_chunks(
+        self,
+        prepared: PreparedRagDocument,
+        *,
+        settings: Settings,
+    ) -> list[PreparedRagChunk]:
+        client = TextToolsClient(settings)
+        chunks: list[PreparedRagChunk] = []
+        for section in prepared.sections:
+            for text_chunk in client.chunk_text(
+                section.text,
+                chunk_size=settings.rag_chunk_size,
+                chunk_overlap=settings.rag_chunk_overlap,
+            ):
+                chunks.append(
+                    PreparedRagChunk(
+                        text=text_chunk.text,
+                        chunk_index=len(chunks),
+                        page_number=section.page_number,
+                        source_location=section.source_location,
+                    )
+                )
+        if not chunks:
+            raise ValueError("No extractable text was available for RAG ingestion.")
+        return chunks
+
+    def _insert_prepared_chunks(
+        self,
+        session: Session,
+        *,
+        document_id: int,
+        prepared_chunks: list[PreparedRagChunk],
+        settings: Settings,
+    ) -> int:
+        model_name = self.repository.oracle_model_name(
+            settings.rag_oracle_embedding_model
+        )
+        sql = text(
+            f"""
+            INSERT INTO rag_document_chunks (
+                document_id,
+                chunk_index,
+                page_number,
+                source_location,
+                chunk_text,
+                metadata_json,
+                embedding
+            )
+            VALUES (
+                :document_id,
+                :chunk_index,
+                :page_number,
+                :source_location,
+                :chunk_text,
+                JSON_OBJECT(
+                    'chunk_provider' VALUE 'rust',
+                    'chunk_length' VALUE :chunk_length
+                    RETURNING CLOB
+                ),
+                VECTOR_EMBEDDING({model_name} USING :chunk_text AS DATA)
+            )
+            """
+        )
+        for chunk in prepared_chunks:
+            session.execute(
+                sql,
+                {
+                    "document_id": document_id,
+                    "chunk_index": chunk.chunk_index,
+                    "page_number": chunk.page_number,
+                    "source_location": chunk.source_location,
+                    "chunk_text": chunk.text,
+                    "chunk_length": len(chunk.text),
+                },
+            )
+        return len(prepared_chunks)
 
     def _oracle_chunk_size(self, value: int) -> int:
         if value < 50 or value > 4000:

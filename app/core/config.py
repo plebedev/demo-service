@@ -78,6 +78,9 @@ class Settings(BaseSettings):
     rag_oracle_embedding_model: str = Field(
         default="MINILM_L12_V2", alias="RAG_ORACLE_EMBEDDING_MODEL"
     )
+    rag_oracle_chunking_provider: str = Field(
+        default="oracle", alias="RAG_ORACLE_CHUNKING_PROVIDER"
+    )
     rag_chunk_size: int = Field(default=600, alias="RAG_CHUNK_SIZE")
     rag_chunk_overlap: int = Field(default=60, alias="RAG_CHUNK_OVERLAP")
     rag_chat_provider: str = Field(default="anthropic", alias="RAG_CHAT_PROVIDER")
@@ -86,6 +89,13 @@ class Settings(BaseSettings):
     )
     rag_chat_temperature: float = Field(default=0.2, alias="RAG_CHAT_TEMPERATURE")
     rag_chat_max_tokens: int = Field(default=4096, alias="RAG_CHAT_MAX_TOKENS")
+    text_tools_enabled: bool = Field(default=False, alias="TEXT_TOOLS_ENABLED")
+    text_tools_base_url: str = Field(
+        default="http://127.0.0.1:8081", alias="TEXT_TOOLS_BASE_URL"
+    )
+    text_tools_timeout_seconds: float = Field(
+        default=2.0, alias="TEXT_TOOLS_TIMEOUT_SECONDS"
+    )
 
     twilio_account_sid: str | None = Field(default=None, alias="TWILIO_ACCOUNT_SID")
     twilio_auth_token: str | None = Field(default=None, alias="TWILIO_AUTH_TOKEN")

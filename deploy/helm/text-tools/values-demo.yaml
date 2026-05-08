@@ -1,0 +1,6 @@
+namespace: demo
+
+configEnv:
+  TEXT_TOOLS_HOST: "0.0.0.0"
+  TEXT_TOOLS_PORT: "8081"
+  RUST_LOG: "info"
