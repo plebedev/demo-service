@@ -1,0 +1,4 @@
+demo-text-tools has been deployed as an internal ClusterIP service.
+
+Service:
+  {{ include "text-tools.fullname" . }}.{{ .Values.namespace }}.svc.cluster.local:{{ .Values.service.port }}
