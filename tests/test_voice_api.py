@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from fastapi.testclient import TestClient
+import pytest
 from sqlalchemy.orm import Session
 
 import json
@@ -494,21 +495,32 @@ def test_admin_can_deactivate_persona(client: TestClient) -> None:
 
 
 def test_record_answer_is_registered_in_tool_registry() -> None:
-    """record_answer tool is included in the voice tool registry."""
-    from app.services.voice.tools import build_voice_tool_registry
+    """record_answer tool is included in the shared tool registry."""
+    from app.services.tool_registry import build_tool_registry
 
-    registry = build_voice_tool_registry()
+    registry = build_tool_registry()
     entry = registry.get("record_answer")
     assert entry.name == "record_answer"
     assert not entry.is_terminal
 
 
+def test_voice_tools_are_registered_in_shared_tool_registry() -> None:
+    """All fixed voice tools are discovered from the shared registry."""
+    from app.services.tool_registry import build_tool_registry
+
+    registry = build_tool_registry()
+
+    assert registry.get("assess_employer_readiness").is_terminal is False
+    assert registry.get("record_answer").is_terminal is False
+    assert registry.get("end_conversation").is_terminal is True
+
+
 def test_record_answer_returns_recorded_status() -> None:
     """record_answer is a no-op that returns status='recorded'."""
-    from app.services.voice.tools import build_voice_tool_registry
+    from app.services.tool_registry import build_tool_registry
 
-    registry = build_voice_tool_registry()
-    result = registry.execute(
+    registry = build_tool_registry()
+    result = registry.execute_json(
         "record_answer",
         {
             "question": "How many employees do you have?",
@@ -525,15 +537,28 @@ def test_record_answer_returns_recorded_status() -> None:
 
 def test_record_answer_tool_definition_has_required_fields() -> None:
     """record_answer tool definition exposes question, user_response, derived_answer."""
-    from app.services.voice.tools import build_voice_tool_registry
+    from app.api.routes.voice import VOICE_TOOL_NAMES
+    from app.services.tool_registry import build_tool_registry
 
-    registry = build_voice_tool_registry()
-    definitions = registry.tool_definitions()
+    registry = build_tool_registry()
+    definitions = registry.tool_definitions(VOICE_TOOL_NAMES)
     defn = next(d for d in definitions if d["name"] == "record_answer")
     props = defn["parameters"]["properties"]
     assert "question" in props
     assert "user_response" in props
     assert "derived_answer" in props
+
+
+def test_voice_registry_scope_excludes_workflow_tools() -> None:
+    """The voice-scoped registry only exposes configured voice tools."""
+    from app.api.routes.voice import VOICE_TOOL_NAMES
+    from app.services.tool_registry import build_tool_registry
+
+    registry = build_tool_registry().scoped(VOICE_TOOL_NAMES)
+
+    assert {entry.name for entry in registry.resolve()} == set(VOICE_TOOL_NAMES)
+    with pytest.raises(KeyError, match="Unknown tool"):
+        registry.get("normalize_input")
 
 
 # ---------------------------------------------------------------------------

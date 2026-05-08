@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.models.run import Run
 from app.services.runs import serialize_run
+from app.services.tool_registry import ToolCategory, tool_decorator
 
 
 @dataclass
@@ -183,6 +184,16 @@ class BriefOutput(BaseModel):
     audit_notes: list[str] = Field(default_factory=list)
 
 
+@tool_decorator(
+    ToolCategory.READ_ONLY,
+    description="Load normalized run inputs, file extracts, and ingestion summary.",
+    prompt_instructions=(
+        "Call this first when you need the persisted notes, uploaded file text, "
+        "or ingestion warnings for the current run."
+    ),
+    input_model=RunContextInput,
+    output_model=RunContextOutput,
+)
 async def load_run_context(ctx: RunContext[WorkflowAgentDeps]) -> RunContextOutput:
     """Return the normalized run data already persisted by ingestion."""
     run_payload = serialize_run(ctx.deps.run)
@@ -203,6 +214,16 @@ async def load_run_context(ctx: RunContext[WorkflowAgentDeps]) -> RunContextOutp
     )
 
 
+@tool_decorator(
+    ToolCategory.MUTATIVE,
+    description="Persist a structured draft brief back onto the run record.",
+    prompt_instructions=(
+        "Only call this after you have produced a bounded structured brief that is "
+        "ready to save for later review."
+    ),
+    input_model=PersistBriefDraftInput,
+    output_model=PersistBriefDraftOutput,
+)
 async def persist_brief_draft(
     ctx: RunContext[WorkflowAgentDeps], brief: PersistBriefDraftInput
 ) -> PersistBriefDraftOutput:
@@ -217,6 +238,16 @@ async def persist_brief_draft(
     return PersistBriefDraftOutput(run_id=ctx.deps.run.id, persisted=True)
 
 
+@tool_decorator(
+    ToolCategory.MUTATIVE,
+    description="Store optional SMS notification preference for a run.",
+    prompt_instructions=(
+        "Use only to store explicit notification preference and phone number. "
+        "Do not send SMS from the workflow."
+    ),
+    input_model=CaptureNotificationPreferenceInput,
+    output_model=CaptureNotificationPreferenceOutput,
+)
 async def capture_notification_preference(
     ctx: RunContext[WorkflowAgentDeps],
     preference: CaptureNotificationPreferenceInput,
@@ -241,6 +272,13 @@ async def capture_notification_preference(
     )
 
 
+@tool_decorator(
+    ToolCategory.READ_ONLY,
+    description="Normalize pasted and uploaded note text for workflow processing.",
+    prompt_instructions="Use before extracting findings so later steps see stable text.",
+    input_model=TextToolInput,
+    output_model=NormalizedInputOutput,
+)
 def normalize_input(payload: TextToolInput) -> NormalizedInputOutput:
     """Normalize whitespace without changing the meaning of the notes."""
     lines = [re.sub(r"\s+", " ", line).strip() for line in payload.text.splitlines()]
@@ -248,6 +286,13 @@ def normalize_input(payload: TextToolInput) -> NormalizedInputOutput:
     return NormalizedInputOutput(text="\n".join(kept), line_count=len(kept))
 
 
+@tool_decorator(
+    ToolCategory.READ_ONLY,
+    description="Split normalized notes into stable sections.",
+    prompt_instructions="Use after normalization before claim, decision, or action extraction.",
+    input_model=SectionsInput,
+    output_model=SectionsOutput,
+)
 def split_into_sections(payload: SectionsInput) -> SectionsOutput:
     """Split notes into stable line/paragraph sections."""
     raw_sections = re.split(r"\n{2,}|(?<=\n)", payload.text)
@@ -271,6 +316,13 @@ def split_into_sections(payload: SectionsInput) -> SectionsOutput:
     return SectionsOutput(sections=sections)
 
 
+@tool_decorator(
+    ToolCategory.READ_ONLY,
+    description="Extract factual claims from note sections.",
+    prompt_instructions="Use for grounded observations, not decisions or action items.",
+    input_model=SectionsToolInput,
+    output_model=ExtractedItemsOutput,
+)
 def extract_claims(payload: SectionsToolInput) -> ExtractedItemsOutput:
     """Extract factual-looking claims from note sections."""
     items = [
@@ -282,6 +334,13 @@ def extract_claims(payload: SectionsToolInput) -> ExtractedItemsOutput:
     return ExtractedItemsOutput(items=items)
 
 
+@tool_decorator(
+    ToolCategory.READ_ONLY,
+    description="Extract explicit decisions from note sections.",
+    prompt_instructions="Use only for notes that look like decisions or approvals.",
+    input_model=SectionsToolInput,
+    output_model=ExtractedItemsOutput,
+)
 def extract_decisions(payload: SectionsToolInput) -> ExtractedItemsOutput:
     """Extract decision-looking notes."""
     items = [
@@ -292,6 +351,13 @@ def extract_decisions(payload: SectionsToolInput) -> ExtractedItemsOutput:
     return ExtractedItemsOutput(items=items)
 
 
+@tool_decorator(
+    ToolCategory.READ_ONLY,
+    description="Extract action items from note sections.",
+    prompt_instructions="Use for todos, asks, owners, and follow-up work.",
+    input_model=SectionsToolInput,
+    output_model=ExtractedItemsOutput,
+)
 def extract_action_items(payload: SectionsToolInput) -> ExtractedItemsOutput:
     """Extract action-item-looking notes."""
     items = [
@@ -302,6 +368,13 @@ def extract_action_items(payload: SectionsToolInput) -> ExtractedItemsOutput:
     return ExtractedItemsOutput(items=items)
 
 
+@tool_decorator(
+    ToolCategory.READ_ONLY,
+    description="Find duplicate extracted findings.",
+    prompt_instructions="Use after extraction and before writing the brief.",
+    input_model=ReconciliationInput,
+    output_model=DuplicateFindingsOutput,
+)
 def find_duplicates(payload: ReconciliationInput) -> DuplicateFindingsOutput:
     """Find repeated or near-repeated findings by normalized text."""
     buckets: dict[str, list[ExtractedItem]] = {}
@@ -319,6 +392,13 @@ def find_duplicates(payload: ReconciliationInput) -> DuplicateFindingsOutput:
     return DuplicateFindingsOutput(duplicates=duplicates)
 
 
+@tool_decorator(
+    ToolCategory.READ_ONLY,
+    description="Find simple contradictions or tensions in extracted findings.",
+    prompt_instructions="Use after extraction and before writing the brief.",
+    input_model=ReconciliationInput,
+    output_model=ContradictionFindingsOutput,
+)
 def find_contradictions(payload: ReconciliationInput) -> ContradictionFindingsOutput:
     """Find simple positive/negative tension in extracted findings."""
     items = [*payload.claims, *payload.decisions, *payload.action_items]
@@ -345,6 +425,13 @@ def find_contradictions(payload: ReconciliationInput) -> ContradictionFindingsOu
     return ContradictionFindingsOutput(contradictions=contradictions)
 
 
+@tool_decorator(
+    ToolCategory.READ_ONLY,
+    description="Format reconciled findings into a concise structured brief.",
+    prompt_instructions="Use as the final tool before persisting the completed run result.",
+    input_model=BriefInput,
+    output_model=BriefOutput,
+)
 def format_brief(payload: BriefInput) -> BriefOutput:
     """Format extracted findings into a concise structured brief."""
     title = payload.title or "Messy notes brief"

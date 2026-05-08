@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from app.services.voice.tools import VoiceToolRegistry
+from app.services.tool_registry import ToolRegistry
 
 
 @dataclass
@@ -17,7 +17,7 @@ class VoiceCallSession:
     persona_id: int
     persona_instructions: str
     persona_tool_config: dict[str, Any]
-    tool_registry: VoiceToolRegistry
+    tool_registry: ToolRegistry
     collected_answers: dict[str, str] = field(default_factory=dict)
 
 
@@ -30,7 +30,7 @@ def create_session(
     persona_id: int,
     persona_instructions: str,
     persona_tool_config: dict[str, Any],
-    tool_registry: VoiceToolRegistry,
+    tool_registry: ToolRegistry,
 ) -> VoiceCallSession:
     """Create and store a new call session."""
     session = VoiceCallSession(

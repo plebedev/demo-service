@@ -1,19 +1,13 @@
-"""Voice tool implementations and typed contracts.
-
-Follows the same pattern as app/workflows/tools.py + app/services/tool_registry.py:
-- Pydantic BaseModel for input/output contracts
-- VoiceToolRegistryEntry dataclass with typed execute() and xAI definition generation
-- VoiceToolRegistry with get() / execute() / xai_definitions()
-"""
+"""Voice tool implementations and typed contracts."""
 
 from __future__ import annotations
 
-import json
-from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any, Callable
+from typing import Any
 
 from pydantic import BaseModel, Field
+
+from app.services.tool_registry import ToolCategory, tool_decorator
 
 
 # ---------------------------------------------------------------------------
@@ -72,6 +66,25 @@ class EndConversationOutput(BaseModel):
     status: str = "closing"
 
 
+@tool_decorator(
+    ToolCategory.READ_ONLY,
+    description=(
+        "Signal that the conversation has reached a natural conclusion "
+        "and the session should close."
+    ),
+    prompt_instructions=(
+        "Call end_conversation tool immediately after detecting that the user is all set, "
+        "and you delivered final remarks "
+        "(e.g. 'have a great day', 'take care', 'glad I could help', "
+        "'I'm still here if you need anything'). "
+        "This includes follow-up responses after an interruption. "
+        "If you have just said goodbye or a closing phrase of any kind, "
+        "call this tool — do not wait for further confirmation. "
+    ),
+    input_model=EndConversationInput,
+    output_model=EndConversationOutput,
+    is_terminal=True,
+)
 def end_conversation(
     input: EndConversationInput,  # noqa: A002
     tool_config: dict[str, Any],
@@ -96,6 +109,20 @@ class RecordAnswerOutput(BaseModel):
     status: str = "recorded"
 
 
+@tool_decorator(
+    ToolCategory.READ_ONLY,
+    description=(
+        "Record a specific question asked during the conversation, "
+        "the user's actual spoken response, and your normalized interpretation of it."
+    ),
+    prompt_instructions=(
+        "Call record_answer after each intake question once you have a clear response. "
+        "Pass the exact question text, the user's spoken response verbatim, "
+        "and your normalized interpretation (e.g. the enum value or derived fact)."
+    ),
+    input_model=RecordAnswerInput,
+    output_model=RecordAnswerOutput,
+)
 def record_answer(
     input: RecordAnswerInput,  # noqa: A002
     tool_config: dict[str, Any],
@@ -197,6 +224,20 @@ _DEFAULT_OUTCOMES: dict[str, dict[str, str]] = {
 }
 
 
+@tool_decorator(
+    ToolCategory.READ_ONLY,
+    description=(
+        "Assess an employer's workforce development readiness based on collected answers "
+        "and return a concise, voice-ready recommendation grounded in workforce frameworks."
+    ),
+    prompt_instructions=(
+        "Call assess_employer_readiness tool after you have collected company size, "
+        "primary problem, partnership status, manager capacity, and workforce program "
+        "experience. Read the voice_response field directly to the caller."
+    ),
+    input_model=AssessEmployerReadinessInput,
+    output_model=AssessEmployerReadinessOutput,
+)
 def assess_employer_readiness(
     input: AssessEmployerReadinessInput,
     tool_config: dict[str, Any],
@@ -264,129 +305,3 @@ def _select_outcome(
     ):
         return "paid_internship"
     return "job_shadowing"
-
-
-# ---------------------------------------------------------------------------
-# Registry
-# ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class VoiceToolRegistryEntry:
-    """Metadata for a tool callable by the xAI voice agent."""
-
-    name: str
-    description: str
-    prompt_instructions: str
-    implementation: Callable[..., Any]
-    input_model: type[BaseModel]
-    output_model: type[BaseModel]
-    is_terminal: bool = False
-
-    def to_xai_definition(self) -> dict[str, Any]:
-        """Generate an xAI function tool definition from the input model schema."""
-        schema = self.input_model.model_json_schema()
-        schema.pop("title", None)
-        return {
-            "type": "function",
-            "name": self.name,
-            "description": self.description,
-            "parameters": schema,
-        }
-
-    def execute(self, args: dict[str, Any], tool_config: dict[str, Any]) -> str:
-        """Validate args via input model, run implementation, return JSON string."""
-        validated = self.input_model.model_validate(args)
-        result = self.implementation(validated, tool_config)
-        if isinstance(result, BaseModel):
-            return result.model_dump_json()
-        return json.dumps(result)
-
-
-class VoiceToolRegistry:
-    """In-memory registry for voice agent tools."""
-
-    def __init__(self, entries: list[VoiceToolRegistryEntry]) -> None:
-        self._entries = {entry.name: entry for entry in entries}
-
-    def get(self, name: str) -> VoiceToolRegistryEntry:
-        """Return one entry or raise a clear lookup error."""
-        try:
-            return self._entries[name]
-        except KeyError as exc:
-            raise KeyError(f"Unknown voice tool '{name}'.") from exc
-
-    def tool_definitions(self) -> list[dict[str, Any]]:
-        """Return function tool definitions for all registered tools."""
-        return [entry.to_xai_definition() for entry in self._entries.values()]
-
-    def build_prompt_section(self) -> str:
-        """Return a system-prompt fragment describing when to call each tool."""
-        lines = ["Tool usage instructions:"]
-        for entry in self._entries.values():
-            lines.append(f"- {entry.name}: {entry.prompt_instructions}")
-        return "\n".join(lines)
-
-    def execute(
-        self, name: str, args: dict[str, Any], tool_config: dict[str, Any]
-    ) -> str:
-        """Execute one registered tool and return a JSON result string."""
-        return self.get(name).execute(args, tool_config)
-
-
-def build_voice_tool_registry() -> VoiceToolRegistry:
-    """Build the voice tool registry used at startup."""
-    return VoiceToolRegistry(
-        [
-            VoiceToolRegistryEntry(
-                name="assess_employer_readiness",
-                description=(
-                    "Assess an employer's workforce development readiness based on collected answers "
-                    "and return a concise, voice-ready recommendation grounded in workforce frameworks."
-                ),
-                prompt_instructions=(
-                    "Call assess_employer_readiness tool after you have collected company size, primary problem, "
-                    "partnership status, manager capacity, and workforce program experience. "
-                    "Read the voice_response field directly to the caller."
-                ),
-                implementation=assess_employer_readiness,
-                input_model=AssessEmployerReadinessInput,
-                output_model=AssessEmployerReadinessOutput,
-            ),
-            VoiceToolRegistryEntry(
-                name="end_conversation",
-                description=(
-                    "Signal that the conversation has reached a natural conclusion "
-                    "and the session should close."
-                ),
-                prompt_instructions=(
-                    "Call end_conversation tool immediately after detecting that the user is all set, "
-                    "and you delivered final remarks "
-                    "(e.g. 'have a great day', 'take care', 'glad I could help', "
-                    "'I'm still here if you need anything'). "
-                    "This includes follow-up responses after an interruption. "
-                    "If you have just said goodbye or a closing phrase of any kind, "
-                    "call this tool — do not wait for further confirmation. "
-                ),
-                implementation=end_conversation,
-                input_model=EndConversationInput,
-                output_model=EndConversationOutput,
-                is_terminal=True,
-            ),
-            VoiceToolRegistryEntry(
-                name="record_answer",
-                description=(
-                    "Record a specific question asked during the conversation, "
-                    "the user's actual spoken response, and your normalized interpretation of it."
-                ),
-                prompt_instructions=(
-                    "Call record_answer after each intake question once you have a clear response. "
-                    "Pass the exact question text, the user's spoken response verbatim, "
-                    "and your normalized interpretation (e.g. the enum value or derived fact)."
-                ),
-                implementation=record_answer,
-                input_model=RecordAnswerInput,
-                output_model=RecordAnswerOutput,
-            ),
-        ]
-    )
