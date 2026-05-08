@@ -20,7 +20,7 @@ pub fn router() -> Router {
 }
 
 async fn health() -> Json<HealthResponse> {
-    Json(HealthResponse::default())
+    Json(HealthResponse::ok())
 }
 
 async fn normalize(Json(payload): Json<NormalizeRequest>) -> impl IntoResponse {
@@ -32,7 +32,7 @@ async fn chunk(Json(payload): Json<ChunkRequest>) -> Result<Json<ChunkResponse>,
     let chunk_size = payload.chunk_size;
     let chunk_overlap = payload.chunk_overlap;
     let chunks = chunk_text(&payload.text, payload.chunk_size, payload.chunk_overlap)
-        .map_err(ApiError::bad_request)?;
+        .map_err(|err| ApiError::bad_request(err.to_string()))?;
     info!(
         input_bytes,
         chunk_size,
@@ -47,6 +47,7 @@ async fn inspect(Json(payload): Json<InspectInputRequest>) -> Json<InspectInputR
     Json(inspect_input(&payload))
 }
 
+#[derive(Debug)]
 struct ApiError {
     status: StatusCode,
     detail: String,

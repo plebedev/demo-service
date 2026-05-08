@@ -6,8 +6,8 @@ pub struct HealthResponse {
     pub service: String,
 }
 
-impl Default for HealthResponse {
-    fn default() -> Self {
+impl HealthResponse {
+    pub fn ok() -> Self {
         Self {
             status: "ok".to_owned(),
             service: "demo-text-tools".to_owned(),

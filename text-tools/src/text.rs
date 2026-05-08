@@ -1,27 +1,27 @@
+use anyhow::{bail, Result};
+
 use crate::models::{
     InputKind, InspectInputRequest, InspectInputResponse, NormalizeResponse, TextChunk,
 };
 
 pub fn normalize_text(value: &str) -> NormalizeResponse {
     let normalized = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    let output_bytes = normalized.len();
+    let changed = normalized != value;
     NormalizeResponse {
-        text: normalized.clone(),
+        text: normalized,
         input_bytes: value.len(),
-        output_bytes: normalized.len(),
-        changed: normalized != value,
+        output_bytes,
+        changed,
     }
 }
 
-pub fn chunk_text(
-    value: &str,
-    chunk_size: usize,
-    chunk_overlap: usize,
-) -> Result<Vec<TextChunk>, String> {
+pub fn chunk_text(value: &str, chunk_size: usize, chunk_overlap: usize) -> Result<Vec<TextChunk>> {
     if chunk_size < 100 {
-        return Err("chunk_size must be at least 100 characters".to_owned());
+        bail!("chunk_size must be at least 100 characters");
     }
     if chunk_overlap >= chunk_size {
-        return Err("chunk_overlap must be smaller than chunk_size".to_owned());
+        bail!("chunk_overlap must be smaller than chunk_size");
     }
 
     let normalized = normalize_text(value).text;

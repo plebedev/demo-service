@@ -34,8 +34,12 @@ fn app() -> Router {
 
 fn listen_addr() -> anyhow::Result<SocketAddr> {
     let host = env::var("TEXT_TOOLS_HOST").unwrap_or_else(|_| "127.0.0.1".to_owned());
-    let port = env::var("TEXT_TOOLS_PORT")
-        .unwrap_or_else(|_| "8081".to_owned())
+    let port = env::var("TEXT_TOOLS_PORT").unwrap_or_else(|_| "8081".to_owned());
+    listen_addr_from(&host, &port)
+}
+
+fn listen_addr_from(host: &str, port: &str) -> anyhow::Result<SocketAddr> {
+    let port = port
         .parse::<u16>()
         .context("TEXT_TOOLS_PORT must be a valid TCP port")?;
     let ip = host
@@ -62,10 +66,8 @@ mod tests {
 
     #[test]
     fn default_listen_addr_is_localhost_8081() {
-        env::remove_var("TEXT_TOOLS_HOST");
-        env::remove_var("TEXT_TOOLS_PORT");
         assert_eq!(
-            listen_addr().unwrap(),
+            listen_addr_from("127.0.0.1", "8081").unwrap(),
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8081)
         );
     }
