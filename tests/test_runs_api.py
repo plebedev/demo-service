@@ -7,7 +7,7 @@ import asyncio
 import pytest
 
 from app.core.config import get_settings
-from app.db.models import Run, RunEvent
+from app.db.models import InvitationCode, Run, RunEvent
 from app.services.workflow_executor import WorkflowExecutionError, execute_run_workflow
 
 
@@ -107,10 +107,115 @@ def test_create_and_get_run(client, db_session) -> None:
     stored = db_session.get(Run, payload["id"])
     assert stored is not None
     assert stored.status == "draft"
+    invitation_code = (
+        db_session.query(InvitationCode)
+        .filter(InvitationCode.code == "runs-create")
+        .one()
+    )
+    assert stored.invitation_code_id == invitation_code.id
 
     fetched = client.get(f"/api/runs/{payload['id']}", headers=headers)
     assert fetched.status_code == 200
     assert fetched.json()["id"] == payload["id"]
+
+
+def test_owned_runs_are_scoped_to_invitation_code(client, db_session) -> None:
+    owner_headers = access_headers(client, "runs-owner")
+    other_headers = access_headers(client, "runs-other")
+
+    created = client.post(
+        "/api/runs",
+        headers=owner_headers,
+        json={"title": "Owner draft", "input_text": "Decision approved"},
+    )
+    assert created.status_code == 201
+    run_id = created.json()["id"]
+
+    other_list = client.get("/api/runs", headers=other_headers)
+    assert other_list.status_code == 200
+    assert other_list.json()["runs"] == []
+
+    scoped_requests = [
+        client.get(f"/api/runs/{run_id}", headers=other_headers),
+        client.put(
+            f"/api/runs/{run_id}",
+            headers=other_headers,
+            json={"title": "Cross tenant edit"},
+        ),
+        client.post(
+            f"/api/runs/{run_id}/sample",
+            headers=other_headers,
+            json={"sample_key": "launch-chaos"},
+        ),
+        client.post(
+            f"/api/runs/{run_id}/notification-preference",
+            headers=other_headers,
+            json={"wants_sms": False, "phone_number": None},
+        ),
+        client.post(
+            f"/api/runs/{run_id}/ingest",
+            headers=other_headers,
+            data={"input_text": "cross tenant notes"},
+        ),
+        client.post(f"/api/runs/{run_id}/execute", headers=other_headers),
+        client.post(f"/api/runs/{run_id}/submit", headers=other_headers),
+    ]
+    assert [response.status_code for response in scoped_requests] == [404] * len(
+        scoped_requests
+    )
+
+    owner_submit = client.post(f"/api/runs/{run_id}/submit", headers=owner_headers)
+    assert owner_submit.status_code == 200
+
+    completed_scoped_requests = [
+        client.get(f"/api/runs/{run_id}/events", headers=other_headers),
+        client.get(f"/api/runs/{run_id}/summary", headers=other_headers),
+        client.post(
+            f"/api/runs/{run_id}/follow-up",
+            headers=other_headers,
+            json={"question": "Summarize decisions?"},
+        ),
+    ]
+    assert [response.status_code for response in completed_scoped_requests] == [
+        404
+    ] * len(completed_scoped_requests)
+
+    owner_fetch = client.get(f"/api/runs/{run_id}", headers=owner_headers)
+    assert owner_fetch.status_code == 200
+    assert owner_fetch.json()["title"] == "Owner draft"
+
+    stored = db_session.get(Run, run_id)
+    assert stored is not None
+    assert stored.invitation_code_id is not None
+
+
+def test_legacy_unowned_runs_remain_visible_and_editable(client, db_session) -> None:
+    headers = access_headers(client, "runs-legacy")
+    legacy_run = Run(title="Legacy draft", input_text="Old shared notes")
+    db_session.add(legacy_run)
+    db_session.commit()
+    db_session.refresh(legacy_run)
+    assert legacy_run.invitation_code_id is None
+
+    listing = client.get("/api/runs", headers=headers)
+    assert listing.status_code == 200
+    assert [run["id"] for run in listing.json()["runs"]] == [legacy_run.id]
+
+    fetched = client.get(f"/api/runs/{legacy_run.id}", headers=headers)
+    assert fetched.status_code == 200
+    assert fetched.json()["title"] == "Legacy draft"
+
+    updated = client.put(
+        f"/api/runs/{legacy_run.id}",
+        headers=headers,
+        json={"title": "Legacy edited", "input_text": "Still accessible"},
+    )
+    assert updated.status_code == 200
+    assert updated.json()["title"] == "Legacy edited"
+
+    db_session.refresh(legacy_run)
+    assert legacy_run.invitation_code_id is None
+    assert legacy_run.title == "Legacy edited"
 
 
 def test_list_runs_is_newest_first(client) -> None:

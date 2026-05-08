@@ -1,0 +1,1 @@
+This is a text placeholder used by democtl while sending an explicit image/png multipart content type.

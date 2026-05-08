@@ -49,6 +49,27 @@ tasks:
     cmds:
       - bash ./local/scripts/logs.sh
 
+  democtl:build:
+    desc: >-
+      Build the local Rust demo operator CLI.
+    dir: local/democtl
+    cmds:
+      - cargo build
+
+  democtl:test:
+    desc: >-
+      Run the local Rust demo operator CLI tests.
+    dir: local/democtl
+    cmds:
+      - cargo test
+
+  democtl:run:
+    desc: >-
+      Run the local Rust demo operator CLI.
+    dir: local/democtl
+    cmds:
+      - cargo run -- {{.CLI_ARGS}}
+
   migrate:
     cmds:
       - poetry run python -m alembic upgrade head

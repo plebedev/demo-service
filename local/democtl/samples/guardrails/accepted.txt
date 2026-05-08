@@ -1,0 +1,1 @@
+This plain UTF-8 note should be accepted by the demo ingestion path.

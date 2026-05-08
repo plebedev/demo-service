@@ -1,0 +1,3 @@
+Decision: Keep the Rust CLI scoped to operator workflows.
+Claim: The backend remains the source of truth for invite validation.
+Action: Add README examples and guardrail checks before using this in demos.

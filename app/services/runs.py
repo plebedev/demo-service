@@ -8,6 +8,7 @@ from typing import Any, TypeVar, cast
 
 from fastapi import HTTPException, status
 from pydantic import BaseModel
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
@@ -29,9 +30,15 @@ from app.services.run_ingestion import ingest_run_input
 ModelT = TypeVar("ModelT", bound=BaseModel)
 
 
-def create_run(db: Session, payload: RunCreateRequest) -> Run:
+def create_run(
+    db: Session,
+    payload: RunCreateRequest,
+    *,
+    invitation_code_id: int | None = None,
+) -> Run:
     """Persist a newly created draft run."""
     run = Run(
+        invitation_code_id=invitation_code_id,
         status=RunStatus.DRAFT.value,
         workflow_key=get_settings().default_workflow_key,
         title=cast(Any, _normalize_title(payload.title)),
@@ -43,9 +50,27 @@ def create_run(db: Session, payload: RunCreateRequest) -> Run:
     return run
 
 
-def get_run_or_404(db: Session, run_id: int) -> Run:
+def get_run_or_404(
+    db: Session,
+    run_id: int,
+    *,
+    invitation_code_id: int | None = None,
+) -> Run:
     """Load one run by id or raise a 404."""
-    run = db.get(Run, run_id)
+    if invitation_code_id is None:
+        run = db.get(Run, run_id)
+    else:
+        run = (
+            db.query(Run)
+            .filter(
+                Run.id == run_id,
+                or_(
+                    Run.invitation_code_id == invitation_code_id,
+                    Run.invitation_code_id.is_(None),
+                ),
+            )
+            .first()
+        )
     if run is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Run not found."
@@ -53,9 +78,17 @@ def get_run_or_404(db: Session, run_id: int) -> Run:
     return run
 
 
-def list_runs(db: Session) -> list[Run]:
+def list_runs(db: Session, *, invitation_code_id: int | None = None) -> list[Run]:
     """Return newest-first run history."""
-    return db.query(Run).order_by(Run.created_at.desc(), Run.id.desc()).all()
+    query = db.query(Run)
+    if invitation_code_id is not None:
+        query = query.filter(
+            or_(
+                Run.invitation_code_id == invitation_code_id,
+                Run.invitation_code_id.is_(None),
+            )
+        )
+    return query.order_by(Run.created_at.desc(), Run.id.desc()).all()
 
 
 def update_run_draft(db: Session, run: Run, payload: RunUpdateRequest) -> Run:

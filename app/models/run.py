@@ -3,7 +3,7 @@
 from datetime import datetime
 from enum import StrEnum
 
-from sqlalchemy import DateTime, Identity, Integer, String, Text, func
+from sqlalchemy import DateTime, ForeignKey, Identity, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -26,6 +26,11 @@ class Run(Base):
 
     id: Mapped[int] = mapped_column(
         Integer, Identity(), primary_key=True, autoincrement=True
+    )
+    invitation_code_id: Mapped[int] = mapped_column(
+        ForeignKey("invitation_codes.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
     )
     status: Mapped[str] = mapped_column(
         String(32), nullable=False, default="draft"
