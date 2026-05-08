@@ -487,7 +487,7 @@ async def _handle_xai_to_twilio(
                 break
 
         elif event_type == "error":
-            logger.error("xAI error event: %s", event.get("error", {}))
+            logger.error("Voice error event: %s", event.get("error", {}))
 
 
 async def _ws_iter(ws: WebSocket):  # type: ignore[no-untyped-def]
