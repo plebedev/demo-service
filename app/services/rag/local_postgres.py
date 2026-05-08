@@ -21,6 +21,7 @@ from app.services.rag.models import (
     RagVectorChunk,
 )
 from app.services.rag.repository import RagDocumentRepository
+from app.services.text_tools import build_rag_chunks_with_optional_text_tools
 
 
 class LocalPostgresRagStrategy:
@@ -69,10 +70,10 @@ class LocalPostgresRagStrategy:
         labels: list[str],
     ) -> RagDocumentResult:
         """Chunk, embed, and persist an already extracted document."""
-        prepared_chunks = build_rag_chunks(
+        prepared_chunks = build_rag_chunks_with_optional_text_tools(
             prepared.sections,
-            chunk_size=settings.rag_chunk_size,
-            chunk_overlap=settings.rag_chunk_overlap,
+            settings=settings,
+            fallback=build_rag_chunks,
         )
         if not prepared_chunks:
             raise ValueError("No extractable text was available for RAG ingestion.")

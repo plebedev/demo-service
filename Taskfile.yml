@@ -2,6 +2,7 @@ version: "3"
 
 vars:
   SRC_DIR: '{{default "app" .SRC_DIR}}'
+  SERVICE: '{{default "backend-api" (default (env "SERVICE") .SERVICE)}}'
 
 tasks:
   install:
@@ -23,6 +24,8 @@ tasks:
 
   verify:
     cmds:
+      - task text-tools:lint
+      - task text-tools:test
       - bash -lc 'poetry run mypy {{.SRC_DIR}} && PYTHONPYCACHEPREFIX=/tmp/backend-api-pyc poetry run python -m compileall {{.SRC_DIR}} && poetry run black --workers 1 --check --diff {{.SRC_DIR}} && poetry run pydocstyle {{.SRC_DIR}} && poetry run python -m pytest && PYTHONPYCACHEPREFIX=/tmp/backend-api-pyc poetry run python -m compileall app alembic'
 
   test:
@@ -36,6 +39,60 @@ tasks:
   build:
     cmds:
       - PYTHONPYCACHEPREFIX=/tmp/backend-api-pyc poetry run python -m compileall app alembic
+
+  service:lint:
+    desc: >-
+      Run lint/checks for SERVICE=backend-api, text-tools, or all.
+    cmds:
+      - 'SERVICE="{{.SERVICE}}" bash -lc ''case "${SERVICE}" in backend-api) task lint ;; text-tools) task text-tools:lint ;; all) task text-tools:lint && task lint ;; *) echo "Unknown SERVICE: ${SERVICE}. Use backend-api, text-tools, or all." && exit 1 ;; esac'''
+
+  service:test:
+    desc: >-
+      Run tests for SERVICE=backend-api, text-tools, or all.
+    cmds:
+      - 'SERVICE="{{.SERVICE}}" bash -lc ''case "${SERVICE}" in backend-api) task test ;; text-tools) task text-tools:test ;; all) task text-tools:test && task test ;; *) echo "Unknown SERVICE: ${SERVICE}. Use backend-api, text-tools, or all." && exit 1 ;; esac'''
+
+  service:build:
+    desc: >-
+      Build/check SERVICE=backend-api, text-tools, or all.
+    cmds:
+      - 'SERVICE="{{.SERVICE}}" bash -lc ''case "${SERVICE}" in backend-api) task build ;; text-tools) task text-tools:build ;; all) task text-tools:build && task build ;; *) echo "Unknown SERVICE: ${SERVICE}. Use backend-api, text-tools, or all." && exit 1 ;; esac'''
+
+  text-tools:run:
+    desc: >-
+      Run the local Rust text tools sidecar.
+    dir: text-tools
+    cmds:
+      - TEXT_TOOLS_HOST="${TEXT_TOOLS_HOST:-127.0.0.1}" TEXT_TOOLS_PORT="${TEXT_TOOLS_PORT:-8081}" RUST_LOG="${RUST_LOG:-info}" cargo run
+
+  text-tools:fmt:
+    desc: >-
+      Format the Rust text tools sidecar.
+    dir: text-tools
+    cmds:
+      - cargo fmt
+
+  text-tools:lint:
+    desc: >-
+      Check formatting, clippy, and tests for the Rust text tools sidecar.
+    dir: text-tools
+    cmds:
+      - cargo fmt --check
+      - cargo clippy --all-targets -- -D warnings
+
+  text-tools:test:
+    desc: >-
+      Run the Rust text tools sidecar tests.
+    dir: text-tools
+    cmds:
+      - cargo test
+
+  text-tools:build:
+    desc: >-
+      Build the Rust text tools sidecar.
+    dir: text-tools
+    cmds:
+      - cargo build
 
   local-up:
     cmds:
@@ -81,11 +138,11 @@ tasks:
 
   docker-build:
     cmds:
-      - IMAGE_REPOSITORY="${IMAGE_REPOSITORY:-backend-api}" IMAGE_TAG="${IMAGE_TAG:-}" bash ./deploy/scripts/build-image.sh
+      - SERVICE="{{.SERVICE}}" IMAGE_REPOSITORY="${IMAGE_REPOSITORY:-backend-api}" TEXT_TOOLS_IMAGE_REPOSITORY="${TEXT_TOOLS_IMAGE_REPOSITORY:-demo-text-tools}" IMAGE_TAG="${IMAGE_TAG:-}" bash ./deploy/scripts/build-image.sh
 
   save-image:
     cmds:
-      - IMAGE_REPOSITORY="${IMAGE_REPOSITORY:-backend-api}" IMAGE_TAG="${IMAGE_TAG:-}" bash ./deploy/scripts/save-image.sh
+      - SERVICE="{{.SERVICE}}" IMAGE_REPOSITORY="${IMAGE_REPOSITORY:-backend-api}" TEXT_TOOLS_IMAGE_REPOSITORY="${TEXT_TOOLS_IMAGE_REPOSITORY:-demo-text-tools}" IMAGE_TAG="${IMAGE_TAG:-}" bash ./deploy/scripts/save-image.sh
 
   apply-runtime-secret:
     cmds:
@@ -94,15 +151,15 @@ tasks:
 
   copy-bundle:
     cmds:
-      - IMAGE_REPOSITORY="${IMAGE_REPOSITORY:-backend-api}" IMAGE_TAG="${IMAGE_TAG:-}" DEPLOY_TARGET="${DEPLOY_TARGET:-ubuntu@openclaw}" DEPLOY_PATH="${DEPLOY_PATH:-/home/ubuntu/backend-api-deploy}" SSH_OPTS="${SSH_OPTS:-}" bash ./deploy/scripts/copy-deploy-bundle.sh
+      - SERVICE="{{.SERVICE}}" IMAGE_REPOSITORY="${IMAGE_REPOSITORY:-backend-api}" TEXT_TOOLS_IMAGE_REPOSITORY="${TEXT_TOOLS_IMAGE_REPOSITORY:-demo-text-tools}" IMAGE_TAG="${IMAGE_TAG:-}" DEPLOY_TARGET="${DEPLOY_TARGET:-ubuntu@openclaw}" DEPLOY_PATH="${DEPLOY_PATH:-/home/ubuntu/backend-api-deploy}" SSH_OPTS="${SSH_OPTS:-}" bash ./deploy/scripts/copy-deploy-bundle.sh
 
   deploy:
     cmds:
-      - RELEASE_NAME="${RELEASE_NAME:-backend-api}" NAMESPACE="${NAMESPACE:-demo}" VALUES_FILE="${VALUES_FILE:-deploy/helm/backend-api/values-demo.yaml}" IMAGE_REPOSITORY="${IMAGE_REPOSITORY:-backend-api}" IMAGE_TAG="${IMAGE_TAG:-}" bash ./deploy/scripts/deploy.sh
+      - SERVICE="{{.SERVICE}}" RELEASE_NAME="${RELEASE_NAME:-backend-api}" TEXT_TOOLS_RELEASE_NAME="${TEXT_TOOLS_RELEASE_NAME:-demo-text-tools}" NAMESPACE="${NAMESPACE:-demo}" VALUES_FILE="${VALUES_FILE:-deploy/helm/backend-api/values-demo.yaml}" TEXT_TOOLS_VALUES_FILE="${TEXT_TOOLS_VALUES_FILE:-deploy/helm/text-tools/values-demo.yaml}" IMAGE_REPOSITORY="${IMAGE_REPOSITORY:-backend-api}" TEXT_TOOLS_IMAGE_REPOSITORY="${TEXT_TOOLS_IMAGE_REPOSITORY:-demo-text-tools}" IMAGE_TAG="${IMAGE_TAG:-}" bash ./deploy/scripts/deploy.sh
 
   ship-deploy:
     cmds:
-      - RELEASE_NAME="${RELEASE_NAME:-backend-api}" NAMESPACE="${NAMESPACE:-demo}" VALUES_FILE="${VALUES_FILE:-deploy/helm/backend-api/values-demo.yaml}" IMAGE_REPOSITORY="${IMAGE_REPOSITORY:-backend-api}" DEPLOY_TARGET="${DEPLOY_TARGET:-ubuntu@openclaw}" DEPLOY_PATH="${DEPLOY_PATH:-/home/ubuntu/backend-api-deploy}" SSH_OPTS="${SSH_OPTS:-}" KEEP_REMOTE_RELEASES="${KEEP_REMOTE_RELEASES:-3}" bash ./deploy/scripts/ship-deploy.sh
+      - SERVICE="{{.SERVICE}}" RELEASE_NAME="${RELEASE_NAME:-backend-api}" TEXT_TOOLS_RELEASE_NAME="${TEXT_TOOLS_RELEASE_NAME:-demo-text-tools}" NAMESPACE="${NAMESPACE:-demo}" VALUES_FILE="${VALUES_FILE:-deploy/helm/backend-api/values-demo.yaml}" TEXT_TOOLS_VALUES_FILE="${TEXT_TOOLS_VALUES_FILE:-deploy/helm/text-tools/values-demo.yaml}" IMAGE_REPOSITORY="${IMAGE_REPOSITORY:-backend-api}" TEXT_TOOLS_IMAGE_REPOSITORY="${TEXT_TOOLS_IMAGE_REPOSITORY:-demo-text-tools}" DEPLOY_TARGET="${DEPLOY_TARGET:-ubuntu@openclaw}" DEPLOY_PATH="${DEPLOY_PATH:-/home/ubuntu/backend-api-deploy}" SSH_OPTS="${SSH_OPTS:-}" KEEP_REMOTE_RELEASES="${KEEP_REMOTE_RELEASES:-3}" bash ./deploy/scripts/ship-deploy.sh
 
   rollback:
     cmds:

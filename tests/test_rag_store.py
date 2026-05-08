@@ -10,6 +10,7 @@ from sqlalchemy import text
 from app.core.config import get_settings
 from app.services.rag.local_postgres import LocalPostgresRagStrategy
 from app.services.rag.models import EMBEDDING_DIMENSIONS
+from app.services.text_tools import TextToolsChunk
 
 
 class FakeEmbeddingProvider:
@@ -164,3 +165,95 @@ def test_local_strategy_splits_embedding_chunks_that_exceed_context(
     )
 
     assert result.chunk_count > 1
+
+
+def test_local_strategy_can_chunk_with_text_tools_sidecar(
+    db_session,
+    monkeypatch,
+) -> None:
+    strategy = LocalPostgresRagStrategy(embeddings=FakeEmbeddingProvider())
+    settings = get_settings().model_copy(
+        update={
+            "text_tools_enabled": True,
+            "text_tools_base_url": "http://text-tools.test",
+            "rag_chunk_size": 600,
+            "rag_chunk_overlap": 60,
+        }
+    )
+    calls = []
+
+    def fake_chunk_text(self, text: str, *, chunk_size: int, chunk_overlap: int):
+        calls.append(
+            {
+                "base_url": self.base_url,
+                "text": text,
+                "chunk_size": chunk_size,
+                "chunk_overlap": chunk_overlap,
+            }
+        )
+        return [TextToolsChunk(index=0, text="alpha from rust sidecar", bytes=23)]
+
+    monkeypatch.setattr(
+        "app.services.text_tools.TextToolsClient.chunk_text",
+        fake_chunk_text,
+    )
+
+    result = asyncio.run(
+        strategy.ingest_document(
+            db_session,
+            settings=settings,
+            source="sidecar.txt",
+            title=None,
+            labels=["flow-a"],
+            input_text="alpha original text",
+            file=None,
+        )
+    )
+
+    assert result.chunk_count == 1
+    assert calls == [
+        {
+            "base_url": "http://text-tools.test",
+            "text": "alpha original text",
+            "chunk_size": 600,
+            "chunk_overlap": 60,
+        }
+    ]
+
+
+def test_local_strategy_falls_back_when_text_tools_sidecar_fails(
+    db_session,
+    monkeypatch,
+) -> None:
+    strategy = LocalPostgresRagStrategy(embeddings=FakeEmbeddingProvider())
+    settings = get_settings().model_copy(
+        update={
+            "text_tools_enabled": True,
+            "text_tools_base_url": "http://text-tools.test",
+            "rag_chunk_size": 600,
+            "rag_chunk_overlap": 60,
+        }
+    )
+
+    def fail_chunk_text(self, text: str, *, chunk_size: int, chunk_overlap: int):
+        del self, text, chunk_size, chunk_overlap
+        raise RuntimeError("sidecar unavailable")
+
+    monkeypatch.setattr(
+        "app.services.text_tools.TextToolsClient.chunk_text",
+        fail_chunk_text,
+    )
+
+    result = asyncio.run(
+        strategy.ingest_document(
+            db_session,
+            settings=settings,
+            source="fallback.txt",
+            title=None,
+            labels=["flow-a"],
+            input_text="alpha fallback text",
+            file=None,
+        )
+    )
+
+    assert result.chunk_count == 1

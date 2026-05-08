@@ -32,6 +32,7 @@ routing.
 - pytest coverage for invite validation, token validation, and protected route access control
   plus demo-run creation, retrieval, editing, submission, and deterministic ingestion coverage
 - Production Dockerfile
+- Rust `text-tools/` sidecar for internal deterministic text operations
 - `local/` Docker Compose for Postgres-backed local development
 - `deploy/` Helm chart and VM ship-deploy scripts
 - Poetry for Python dependency management
@@ -46,9 +47,11 @@ routing.
 |-- README.md
 |-- alembic/
 |-- app/
+|-- text-tools/
 |-- deploy/
 |   |-- helm/
-|   |   `-- backend-api/
+|   |   |-- backend-api/
+|   |   `-- text-tools/
 |   `-- scripts/
 `-- local/
     |-- docker-compose.yaml
@@ -64,6 +67,46 @@ routing.
 - Alembic
 - Postgres for local development
 - Oracle Autonomous Database via walletless TLS in deployed environments
+- Rust / Axum for the internal `demo-text-tools` sidecar
+
+## Rust text tools sidecar
+
+`text-tools/` is an internal Rust service for learning and for future
+deterministic text operations. It currently exposes:
+
+```text
+GET  /health
+POST /v1/text/normalize
+POST /v1/text/chunk
+POST /v1/input/inspect
+```
+
+Run it locally before the Python backend:
+
+```bash
+task text-tools:run
+TEXT_TOOLS_ENABLED=true TEXT_TOOLS_BASE_URL=http://127.0.0.1:8081 task dev
+```
+
+Useful checks:
+
+```bash
+task text-tools:test
+task text-tools:lint
+task service:build SERVICE=text-tools
+```
+
+Deployment scripts accept `SERVICE=backend-api`, `SERVICE=text-tools`, or
+`SERVICE=all`. For `SERVICE=all`, the Rust sidecar is built and deployed before
+the Python backend:
+
+```bash
+task docker-build SERVICE=all
+task deploy SERVICE=all
+task ship-deploy SERVICE=all
+```
+
+The sidecar Helm chart is internal-only and does not create ingress.
 
 ## Configuration
 
@@ -109,6 +152,9 @@ Important variables:
 | `RAG_ORACLE_EMBEDDING_MODEL` | Oracle ONNX model object used with `VECTOR_EMBEDDING`, default `MINILM_L12_V2` |
 | `RAG_CHUNK_SIZE` | Character chunk target for RAG documents, default `800` |
 | `RAG_CHUNK_OVERLAP` | Character overlap between RAG chunks, default `80` |
+| `TEXT_TOOLS_ENABLED` | Enables backend use of the Rust text-tools sidecar; default `false` |
+| `TEXT_TOOLS_BASE_URL` | Base URL for the internal sidecar, default `http://127.0.0.1:8081` locally |
+| `TEXT_TOOLS_TIMEOUT_SECONDS` | Timeout budget for future sidecar calls, default `2` |
 | `EMAIL_PROVIDER` | Existing draft provider selector for internal draft endpoints |
 | `INVITE_EMAIL_FROM` | Legacy draft sender placeholder |
 | `INVITE_EMAIL_REPLY_TO` | Legacy draft reply-to placeholder |
