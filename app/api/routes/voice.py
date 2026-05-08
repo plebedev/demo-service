@@ -565,8 +565,18 @@ async def _handle_browser_output(
                     result = entry.execute(args, tool_config)
                     await xai.send_tool_result(call_id, result)
 
+        elif event_type == "conversation.item.input_audio_transcription.completed":
+            transcript = event.get("transcript", "")
+            if transcript:
+                await ws.send_text(
+                    json.dumps({"type": "user_transcript", "text": transcript})
+                )
+
         elif event_type == "response.done":
             if close_after_response:
+                # Short drain: xAI may still have audio deltas in-flight when
+                # response.done arrives. Let them land before signalling close.
+                await asyncio.sleep(0.4)
                 await ws.send_text(json.dumps({"type": "end"}))
                 await ws.close()
                 break
