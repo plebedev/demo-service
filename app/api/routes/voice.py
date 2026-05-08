@@ -129,15 +129,6 @@ def _load_tool_config(persona: VoicePersona) -> dict[str, Any]:
         return {}
 
 
-def _build_instructions(persona: VoicePersona, greeting: str | None) -> str:
-    if greeting:
-        return (
-            f"Begin the conversation by saying exactly:\n{greeting}\n\n"
-            f"{persona.instructions}"
-        )
-    return persona.instructions
-
-
 def _validate_twilio_signature(
     request_url: str,
     post_params: dict[str, str],
@@ -457,16 +448,14 @@ async def voice_browser_stream(
         .first()
     )
     voice_name = voice_config.voice_name if voice_config else "Eve"
-    greeting = voice_config.synthesized_greeting if voice_config else None
 
     session_id = f"browser-{claims.token_id}"
     tool_config = _load_tool_config(persona)
-    instructions = _build_instructions(persona, greeting)
     create_session(
         session_id=session_id,
         experience_id=ExperienceId.VOICE_DEMO,
         persona_id=persona.id,
-        persona_instructions=instructions,
+        persona_instructions=persona.instructions,
         persona_tool_config=tool_config,
         tool_registry=_voice_tool_registry,
     )
@@ -479,16 +468,25 @@ async def voice_browser_stream(
             model=settings.voice_xai_model,
         ) as xai:
             await xai.configure_session(
-                instructions=instructions,
+                instructions=persona.instructions,
                 tools=_voice_tool_registry.xai_definitions(),
                 voice=voice_name,
             )
             await xai.start_response()
-            await asyncio.gather(
-                _handle_browser_input(websocket, xai),
-                _handle_browser_output(websocket, xai, tool_config, pending_tool_calls),
-                return_exceptions=True,
+            input_task = asyncio.create_task(_handle_browser_input(websocket, xai))
+            output_task = asyncio.create_task(
+                _handle_browser_output(websocket, xai, tool_config, pending_tool_calls)
             )
+            done, pending = await asyncio.wait(
+                [input_task, output_task],
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            for task in pending:
+                task.cancel()
+                try:
+                    await task
+                except (asyncio.CancelledError, Exception):
+                    pass
     except WebSocketDisconnect:
         pass
     except Exception:
@@ -517,6 +515,8 @@ async def _handle_browser_output(
     pending_tool_calls: dict[str, dict[str, Any]],
 ) -> None:
     """Forward xAI events back to the browser."""
+    close_after_response = False
+
     while True:
         try:
             event = await xai.receive()
@@ -558,8 +558,18 @@ async def _handle_browser_output(
                     args: dict[str, Any] = json.loads(args_json)
                 except (json.JSONDecodeError, ValueError):
                     args = {}
-                result = _voice_tool_registry.execute(tool_name, args, tool_config)
-                await xai.send_tool_result(call_id, result)
+                entry = _voice_tool_registry.get(tool_name)
+                if entry.is_terminal:
+                    close_after_response = True
+                else:
+                    result = entry.execute(args, tool_config)
+                    await xai.send_tool_result(call_id, result)
+
+        elif event_type == "response.done":
+            if close_after_response:
+                await ws.send_text(json.dumps({"type": "end"}))
+                await ws.close()
+                break
 
         elif event_type == "error":
             logger.error("xAI error in browser session: %s", event.get("error", {}))

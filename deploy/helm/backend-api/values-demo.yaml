@@ -21,6 +21,9 @@ configEnv:
   INVITE_EMAIL_DRAFT_MODEL: "gpt-5-mini"
   OCI_EMAIL_SMTP_PORT: "587"
   SMS_NOTIFICATION_ENABLED: "false"
+  VOICE_XAI_MODEL: "grok-voice-think-fast-1.0"
+  VOICE_GREETING_PROVIDER: "openai"
+  VOICE_GREETING_MODEL: "gpt-4o-mini"
 
 existingSecretName: "backend-api-secrets"
 

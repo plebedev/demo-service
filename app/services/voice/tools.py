@@ -62,6 +62,24 @@ class WorkforceProgramExperience(StrEnum):
     EXPERIENCED = "experienced"
 
 
+class EndConversationInput(BaseModel):
+    """No parameters — signals the agent is done and the session should close."""
+
+
+class EndConversationOutput(BaseModel):
+    """Acknowledgement returned to xAI before the backend closes the session."""
+
+    status: str = "closing"
+
+
+def end_conversation(
+    input: EndConversationInput,  # noqa: A002
+    tool_config: dict[str, Any],
+) -> EndConversationOutput:
+    """No-op implementation — closing is handled by the session loop."""
+    return EndConversationOutput()
+
+
 class AssessEmployerReadinessInput(BaseModel):
     """Structured intake collected during the voice conversation."""
 
@@ -239,6 +257,7 @@ class VoiceToolRegistryEntry:
     implementation: Callable[..., Any]
     input_model: type[BaseModel]
     output_model: type[BaseModel]
+    is_terminal: bool = False
 
     def to_xai_definition(self) -> dict[str, Any]:
         """Generate an xAI function tool definition from the input model schema."""
@@ -302,6 +321,22 @@ def build_voice_tool_registry() -> VoiceToolRegistry:
                 implementation=assess_employer_readiness,
                 input_model=AssessEmployerReadinessInput,
                 output_model=AssessEmployerReadinessOutput,
-            )
+            ),
+            VoiceToolRegistryEntry(
+                name="end_conversation",
+                description=(
+                    "Signal that the conversation has reached a natural conclusion "
+                    "and the session should close."
+                ),
+                prompt_instructions=(
+                    "Call this after you have delivered your closing line and the caller "
+                    "has indicated they are done (e.g. 'thank you', 'that's all', 'I'm all set'). "
+                    "Do not call this mid-conversation."
+                ),
+                implementation=end_conversation,
+                input_model=EndConversationInput,
+                output_model=EndConversationOutput,
+                is_terminal=True,
+            ),
         ]
     )
