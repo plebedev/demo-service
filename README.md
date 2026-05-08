@@ -153,7 +153,7 @@ Important variables:
 | `RAG_CHUNK_SIZE` | Character chunk target for RAG documents, default `800` |
 | `RAG_CHUNK_OVERLAP` | Character overlap between RAG chunks, default `80` |
 | `TEXT_TOOLS_ENABLED` | Enables backend use of the Rust text-tools sidecar; default `false` |
-| `TEXT_TOOLS_BASE_URL` | Base URL for the internal sidecar, default `http://127.0.0.1:8081` locally |
+| `TEXT_TOOLS_BASE_URL` | Base URL for the sidecar; local default is `http://127.0.0.1:8081`, in-cluster service default is `http://text-tools.demo.svc.cluster.local` |
 | `TEXT_TOOLS_TIMEOUT_SECONDS` | Timeout budget for future sidecar calls, default `2` |
 | `EMAIL_PROVIDER` | Existing draft provider selector for internal draft endpoints |
 | `INVITE_EMAIL_FROM` | Legacy draft sender placeholder |
