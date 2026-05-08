@@ -80,6 +80,30 @@ def end_conversation(
     return EndConversationOutput()
 
 
+class RecordAnswerInput(BaseModel):
+    """Record a question, the user's raw spoken response, and the derived interpretation."""
+
+    question: str = Field(description="The question that was asked")
+    user_response: str = Field(description="The user's actual spoken response")
+    derived_answer: str = Field(
+        description="How the model interpreted or normalized the response"
+    )
+
+
+class RecordAnswerOutput(BaseModel):
+    """Acknowledgement that the answer was recorded."""
+
+    status: str = "recorded"
+
+
+def record_answer(
+    input: RecordAnswerInput,  # noqa: A002
+    tool_config: dict[str, Any],
+) -> RecordAnswerOutput:
+    """No-op — the frontend receives call details via a tool_call WebSocket event."""
+    return RecordAnswerOutput()
+
+
 class AssessEmployerReadinessInput(BaseModel):
     """Structured intake collected during the voice conversation."""
 
@@ -348,6 +372,21 @@ def build_voice_tool_registry() -> VoiceToolRegistry:
                 input_model=EndConversationInput,
                 output_model=EndConversationOutput,
                 is_terminal=True,
+            ),
+            VoiceToolRegistryEntry(
+                name="record_answer",
+                description=(
+                    "Record a specific question asked during the conversation, "
+                    "the user's actual spoken response, and your normalized interpretation of it."
+                ),
+                prompt_instructions=(
+                    "Call record_answer after each intake question once you have a clear response. "
+                    "Pass the exact question text, the user's spoken response verbatim, "
+                    "and your normalized interpretation (e.g. the enum value or derived fact)."
+                ),
+                implementation=record_answer,
+                input_model=RecordAnswerInput,
+                output_model=RecordAnswerOutput,
             ),
         ]
     )

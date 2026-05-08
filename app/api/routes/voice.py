@@ -456,6 +456,11 @@ async def _handle_xai_to_twilio(
                     args: dict[str, Any] = json.loads(args_json)
                 except (json.JSONDecodeError, ValueError):
                     args = {}
+                await ws.send_text(
+                    json.dumps(
+                        {"event": "tool_call", "tool_name": tool_name, "args": args}
+                    )
+                )
                 try:
                     entry = _voice_tool_registry.get(tool_name)
                 except KeyError:

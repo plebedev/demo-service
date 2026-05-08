@@ -470,3 +470,51 @@ def test_admin_can_deactivate_persona(client: TestClient) -> None:
     )
     assert deactivate_response.status_code == 200
     assert deactivate_response.json()["is_active"] is False
+
+
+# ---------------------------------------------------------------------------
+# Tool unit tests
+# ---------------------------------------------------------------------------
+
+
+def test_record_answer_is_registered_in_tool_registry() -> None:
+    """record_answer tool is included in the voice tool registry."""
+    from app.services.voice.tools import build_voice_tool_registry
+
+    registry = build_voice_tool_registry()
+    entry = registry.get("record_answer")
+    assert entry.name == "record_answer"
+    assert not entry.is_terminal
+
+
+def test_record_answer_returns_recorded_status() -> None:
+    """record_answer is a no-op that returns status='recorded'."""
+    from app.services.voice.tools import build_voice_tool_registry
+
+    registry = build_voice_tool_registry()
+    result = registry.execute(
+        "record_answer",
+        {
+            "question": "How many employees do you have?",
+            "user_response": "We have about fifty people.",
+            "derived_answer": "small",
+        },
+        {},
+    )
+    import json
+
+    payload = json.loads(result)
+    assert payload["status"] == "recorded"
+
+
+def test_record_answer_tool_definition_has_required_fields() -> None:
+    """record_answer tool definition exposes question, user_response, derived_answer."""
+    from app.services.voice.tools import build_voice_tool_registry
+
+    registry = build_voice_tool_registry()
+    definitions = registry.tool_definitions()
+    defn = next(d for d in definitions if d["name"] == "record_answer")
+    props = defn["parameters"]["properties"]
+    assert "question" in props
+    assert "user_response" in props
+    assert "derived_answer" in props
