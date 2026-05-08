@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "file=$(jq -r '.tool_input.file_path // empty'); echo \"$file\" | grep -qE '\\.py$' && cd /Users/plebedev/github/demo/demo-service && task verify 2>&1 || true",
+            "timeout": 120,
+            "statusMessage": "Running task verify..."
+          }
+        ]
+      }
+    ]
+  }
+}
