@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import asyncio
+from dataclasses import replace
 
 import pytest
 
@@ -18,7 +19,11 @@ from app.services.model_factory import (
 )
 from app.services.run_events import record_run_event, serialize_run_event
 from app.services.runs import create_run
-from app.services.tool_registry import build_tool_registry
+from app.services.tool_registry import (
+    ToolCategory,
+    ToolRegistry,
+    build_tool_registry,
+)
 from app.services.workflow_executor import WorkflowExecutionError, execute_run_workflow
 from app.schemas.run_events import RunEventPayload
 from app.schemas.runs import RunCreateRequest
@@ -205,6 +210,43 @@ def test_tool_registry_lookup_and_prompt_assembly() -> None:
     assert "Tool instructions:" in prompt
     assert "load_run_context" in prompt
     assert "persist_brief_draft" in prompt
+
+
+def test_tool_registry_discovers_exported_decorated_tools() -> None:
+    registry = build_tool_registry()
+
+    for name in (
+        "normalize_input",
+        "assess_employer_readiness",
+        "record_answer",
+        "end_conversation",
+    ):
+        entry = registry.get(name)
+        assert entry.name == name
+        assert isinstance(entry.category, ToolCategory)
+
+
+def test_tool_registry_terminal_flag_defaults_to_false() -> None:
+    registry = build_tool_registry()
+
+    assert registry.get("record_answer").is_terminal is False
+    assert registry.get("normalize_input").is_terminal is False
+
+
+def test_tool_registry_duplicate_names_fail_clearly() -> None:
+    registry = build_tool_registry()
+    entry = registry.get("normalize_input")
+
+    with pytest.raises(ValueError, match="Duplicate tool registry entry"):
+        ToolRegistry([entry, replace(entry)])
+
+
+def test_tool_registry_scopes_to_selected_tool_names() -> None:
+    registry = build_tool_registry().scoped(["record_answer"])
+
+    assert registry.get("record_answer").name == "record_answer"
+    with pytest.raises(KeyError, match="Unknown tool"):
+        registry.get("normalize_input")
 
 
 def test_provider_model_config_is_parsed_correctly() -> None:

@@ -1,49 +1,18 @@
-"""Typed workflow tool registry and prompt assembly metadata."""
+"""Shared decorator-based registry for backend agent tools."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any, Callable
+import json
+from typing import Any, Callable, TypeVar
 
 from pydantic import BaseModel
 from pydantic_ai import Tool
 
-from app.workflows.tools import (
-    BriefInput,
-    BriefOutput,
-    CaptureNotificationPreferenceInput,
-    CaptureNotificationPreferenceOutput,
-    ContradictionFindingsOutput,
-    DuplicateFindingsOutput,
-    ExtractedItemsOutput,
-    NormalizedInputOutput,
-    PersistBriefDraftInput,
-    PersistBriefDraftOutput,
-    ReconciliationInput,
-    RunContextInput,
-    RunContextOutput,
-    SectionsInput,
-    SectionsOutput,
-    SectionsToolInput,
-    TextToolInput,
-    WorkflowAgentDeps,
-    capture_notification_preference,
-    extract_action_items,
-    extract_claims,
-    extract_decisions,
-    find_contradictions,
-    find_duplicates,
-    format_brief,
-    load_run_context,
-    normalize_input,
-    persist_brief_draft,
-    split_into_sections,
-)
-
 
 class ToolCategory(StrEnum):
-    """Supported classes of workflow tools."""
+    """Supported classes of backend tools."""
 
     READ_ONLY = "read_only"
     MUTATIVE = "mutative"
@@ -51,7 +20,7 @@ class ToolCategory(StrEnum):
 
 @dataclass(frozen=True)
 class ToolRegistryEntry:
-    """Metadata for a tool exposed to workflow agents."""
+    """Metadata for a tool exposed to one or more backend experiences."""
 
     name: str
     description: str
@@ -63,14 +32,26 @@ class ToolRegistryEntry:
     provider_override: str | None = None
     model_override: str | None = None
     implemented: bool = True
+    is_terminal: bool = False
 
-    def to_pydantic_tool(self) -> Tool[WorkflowAgentDeps]:
+    def to_pydantic_tool(self) -> Tool[Any]:
         """Convert registry metadata into a PydanticAI tool wrapper."""
         return Tool(
             self.implementation,
             name=self.name,
             description=self.description,
         )
+
+    def to_tool_definition(self) -> dict[str, Any]:
+        """Generate an OpenAI-compatible function tool definition."""
+        schema = self.input_model.model_json_schema()
+        schema.pop("title", None)
+        return {
+            "type": "function",
+            "name": self.name,
+            "description": self.description,
+            "parameters": schema,
+        }
 
     def execute(self, payload: BaseModel) -> BaseModel:
         """Execute a deterministic registry tool with typed input/output."""
@@ -79,31 +60,90 @@ class ToolRegistryEntry:
             return result
         return self.output_model.model_validate(result)
 
+    def execute_json(self, args: dict[str, Any], tool_config: dict[str, Any]) -> str:
+        """Validate dict args, execute a voice-style tool, and return JSON."""
+        validated = self.input_model.model_validate(args)
+        result = self.implementation(validated, tool_config)
+        if isinstance(result, BaseModel):
+            return result.model_dump_json()
+        return json.dumps(result)
 
-class WorkflowToolRegistry:
-    """In-memory registry for the demo workflow tools."""
+
+ToolCallableT = TypeVar("ToolCallableT", bound=Callable[..., Any])
+
+
+def tool_decorator(
+    category: ToolCategory,
+    *,
+    description: str,
+    prompt_instructions: str,
+    input_model: type[BaseModel],
+    output_model: type[BaseModel],
+    provider_override: str | None = None,
+    model_override: str | None = None,
+    implemented: bool = True,
+    is_terminal: bool = False,
+) -> Callable[[ToolCallableT], ToolCallableT]:
+    """Attach registry metadata to a backend tool function."""
+
+    def decorator(fn: ToolCallableT) -> ToolCallableT:
+        fn._tool_meta = ToolRegistryEntry(  # type: ignore[attr-defined]
+            name=fn.__name__,
+            description=description,
+            prompt_instructions=prompt_instructions,
+            implementation=fn,
+            category=category,
+            input_model=input_model,
+            output_model=output_model,
+            provider_override=provider_override,
+            model_override=model_override,
+            implemented=implemented,
+            is_terminal=is_terminal,
+        )
+        return fn
+
+    return decorator
+
+
+class ToolRegistry:
+    """In-memory registry for discovered backend tools."""
 
     def __init__(self, entries: list[ToolRegistryEntry]) -> None:
-        self._entries = {entry.name: entry for entry in entries}
+        self._entries: dict[str, ToolRegistryEntry] = {}
+        for entry in entries:
+            if entry.name in self._entries:
+                raise ValueError(f"Duplicate tool registry entry '{entry.name}'.")
+            self._entries[entry.name] = entry
 
     def get(self, name: str) -> ToolRegistryEntry:
         """Return one registry entry or raise a clear lookup error."""
         try:
             return self._entries[name]
         except KeyError as exc:
-            raise KeyError(f"Unknown workflow tool '{name}'.") from exc
+            raise KeyError(f"Unknown tool '{name}'.") from exc
 
-    def resolve(self, names: list[str]) -> list[ToolRegistryEntry]:
+    def resolve(self, names: list[str] | None = None) -> list[ToolRegistryEntry]:
         """Resolve a configured tool list into concrete registry entries."""
+        if names is None:
+            return list(self._entries.values())
         return [self.get(name) for name in names]
 
-    def validate_tool_names(self, workflow_key: str, tool_names: list[str]) -> None:
-        """Fail fast when YAML references unknown tool names."""
-        for tool_name in tool_names:
-            self.get(tool_name)
+    def scoped(self, names: list[str]) -> "ToolRegistry":
+        """Build a registry containing only the selected tool names."""
+        return ToolRegistry(self.resolve(names))
 
-    def prompt_block(self, tool_names: list[str]) -> str | None:
-        """Build the tool-instruction prompt block for one agent."""
+    def validate_tool_names(self, workflow_key: str, tool_names: list[str]) -> None:
+        """Fail fast when configuration references unknown tool names."""
+        for tool_name in tool_names:
+            try:
+                self.get(tool_name)
+            except KeyError as exc:
+                raise KeyError(
+                    f"Workflow '{workflow_key}' references unknown tool '{tool_name}'."
+                ) from exc
+
+    def prompt_block(self, tool_names: list[str] | None = None) -> str | None:
+        """Build a tool-instruction prompt block."""
         tools = self.resolve(tool_names)
         if not tools:
             return None
@@ -112,122 +152,37 @@ class WorkflowToolRegistry:
             lines.append(f"- {tool.name}: {tool.prompt_instructions}")
         return "\n".join(lines)
 
+    def tool_definitions(
+        self, tool_names: list[str] | None = None
+    ) -> list[dict[str, Any]]:
+        """Return OpenAI-compatible function definitions for selected tools."""
+        return [entry.to_tool_definition() for entry in self.resolve(tool_names)]
+
     def execute(self, name: str, payload: BaseModel) -> BaseModel:
         """Execute one registered deterministic tool."""
         return self.get(name).execute(payload)
 
+    def execute_json(
+        self, name: str, args: dict[str, Any], tool_config: dict[str, Any]
+    ) -> str:
+        """Execute one registered JSON/function-call style tool."""
+        return self.get(name).execute_json(args, tool_config)
 
-def build_tool_registry() -> WorkflowToolRegistry:
-    """Build the workflow tool registry used at startup."""
-    return WorkflowToolRegistry(
-        entries=[
-            ToolRegistryEntry(
-                name="load_run_context",
-                description="Load normalized run inputs, file extracts, and ingestion summary.",
-                prompt_instructions=(
-                    "Call this first when you need the persisted notes, uploaded file text, "
-                    "or ingestion warnings for the current run."
-                ),
-                implementation=load_run_context,
-                category=ToolCategory.READ_ONLY,
-                input_model=RunContextInput,
-                output_model=RunContextOutput,
-            ),
-            ToolRegistryEntry(
-                name="persist_brief_draft",
-                description="Persist a structured draft brief back onto the run record.",
-                prompt_instructions=(
-                    "Only call this after you have produced a bounded structured brief that is "
-                    "ready to save for later review."
-                ),
-                implementation=persist_brief_draft,
-                category=ToolCategory.MUTATIVE,
-                input_model=PersistBriefDraftInput,
-                output_model=PersistBriefDraftOutput,
-            ),
-            ToolRegistryEntry(
-                name="normalize_input",
-                description="Normalize pasted and uploaded note text for workflow processing.",
-                prompt_instructions="Use before extracting findings so later steps see stable text.",
-                implementation=normalize_input,
-                category=ToolCategory.READ_ONLY,
-                input_model=TextToolInput,
-                output_model=NormalizedInputOutput,
-            ),
-            ToolRegistryEntry(
-                name="split_into_sections",
-                description="Split normalized notes into stable sections.",
-                prompt_instructions="Use after normalization before claim, decision, or action extraction.",
-                implementation=split_into_sections,
-                category=ToolCategory.READ_ONLY,
-                input_model=SectionsInput,
-                output_model=SectionsOutput,
-            ),
-            ToolRegistryEntry(
-                name="extract_claims",
-                description="Extract factual claims from note sections.",
-                prompt_instructions="Use for grounded observations, not decisions or action items.",
-                implementation=extract_claims,
-                category=ToolCategory.READ_ONLY,
-                input_model=SectionsToolInput,
-                output_model=ExtractedItemsOutput,
-            ),
-            ToolRegistryEntry(
-                name="extract_decisions",
-                description="Extract explicit decisions from note sections.",
-                prompt_instructions="Use only for notes that look like decisions or approvals.",
-                implementation=extract_decisions,
-                category=ToolCategory.READ_ONLY,
-                input_model=SectionsToolInput,
-                output_model=ExtractedItemsOutput,
-            ),
-            ToolRegistryEntry(
-                name="extract_action_items",
-                description="Extract action items from note sections.",
-                prompt_instructions="Use for todos, asks, owners, and follow-up work.",
-                implementation=extract_action_items,
-                category=ToolCategory.READ_ONLY,
-                input_model=SectionsToolInput,
-                output_model=ExtractedItemsOutput,
-            ),
-            ToolRegistryEntry(
-                name="find_duplicates",
-                description="Find duplicate extracted findings.",
-                prompt_instructions="Use after extraction and before writing the brief.",
-                implementation=find_duplicates,
-                category=ToolCategory.READ_ONLY,
-                input_model=ReconciliationInput,
-                output_model=DuplicateFindingsOutput,
-            ),
-            ToolRegistryEntry(
-                name="find_contradictions",
-                description="Find simple contradictions or tensions in extracted findings.",
-                prompt_instructions="Use after extraction and before writing the brief.",
-                implementation=find_contradictions,
-                category=ToolCategory.READ_ONLY,
-                input_model=ReconciliationInput,
-                output_model=ContradictionFindingsOutput,
-            ),
-            ToolRegistryEntry(
-                name="format_brief",
-                description="Format reconciled findings into a concise structured brief.",
-                prompt_instructions="Use as the final tool before persisting the completed run result.",
-                implementation=format_brief,
-                category=ToolCategory.READ_ONLY,
-                input_model=BriefInput,
-                output_model=BriefOutput,
-            ),
-            ToolRegistryEntry(
-                name="capture_notification_preference",
-                description="Store optional SMS notification preference for a run.",
-                prompt_instructions=(
-                    "Use only to store explicit notification preference and phone number. "
-                    "Do not send SMS from the workflow."
-                ),
-                implementation=capture_notification_preference,
-                category=ToolCategory.MUTATIVE,
-                input_model=CaptureNotificationPreferenceInput,
-                output_model=CaptureNotificationPreferenceOutput,
-            ),
-        ]
-    )
+
+WorkflowToolRegistry = ToolRegistry
+
+
+def build_tool_registry() -> ToolRegistry:
+    """Build the backend tool registry by scanning decorated tool exports."""
+    from app.services import tools as tools_module
+
+    entries: list[ToolRegistryEntry] = []
+    for name in tools_module.__all__:
+        obj = getattr(tools_module, name, None)
+        if obj is None or not callable(obj) or isinstance(obj, type):
+            continue
+        meta: ToolRegistryEntry | None = getattr(obj, "_tool_meta", None)
+        if meta is None:
+            raise ValueError(f"Tool '{name}' is exported but missing @tool_decorator")
+        entries.append(meta)
+    return ToolRegistry(entries)

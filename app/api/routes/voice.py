@@ -54,12 +54,18 @@ from app.services.voice.cost import estimate_cost
 from app.services.voice.factory import get_voice_client
 from app.services.voice.greeting import refresh_greeting_if_needed
 from app.services.voice.session import create_session, get_session, remove_session
-from app.services.voice.tools import VoiceToolRegistry, build_voice_tool_registry
+from app.services.tool_registry import ToolRegistry, build_tool_registry
 
 logger = logging.getLogger(__name__)
 
+VOICE_TOOL_NAMES = [
+    "assess_employer_readiness",
+    "end_conversation",
+    "record_answer",
+]
+
 # Singleton registry built once at import time — stateless, shared across requests.
-_voice_tool_registry: VoiceToolRegistry = build_voice_tool_registry()
+_voice_tool_registry: ToolRegistry = build_tool_registry().scoped(VOICE_TOOL_NAMES)
 
 # Hardcoded provider/voice catalogue — matches factory._PROVIDER_MODELS keys.
 _PROVIDER_VOICES: dict[str, list[str]] = {
@@ -468,7 +474,7 @@ async def _handle_twilio_messages(
                 provider=resolved_provider,
                 voice=voice,
             )
-            tool_prompt = _voice_tool_registry.build_prompt_section()
+            tool_prompt = _voice_tool_registry.prompt_block() or ""
             instructions = f"{persona.instructions}\n\n{tool_prompt}"
             await vc.configure_session(
                 instructions=instructions,
@@ -630,7 +636,7 @@ async def _handle_xai_to_twilio(
                 else:
                     session = get_session(call_sid_ref[0] or "")
                     tool_config = session.persona_tool_config if session else {}
-                    result = entry.execute(args, tool_config)
+                    result = entry.execute_json(args, tool_config)
                     await vc.send_tool_result(call_id, result)
 
         elif event_type == "response.done":
