@@ -165,7 +165,7 @@ def refresh_greeting_if_needed(
         db.query(VoicePersona)
         .filter(
             VoicePersona.experience_id == experience_id,
-            VoicePersona.is_active.is_(True),
+            VoicePersona.is_active == True,
         )
         .all()
     )

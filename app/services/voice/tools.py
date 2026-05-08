@@ -296,6 +296,13 @@ class VoiceToolRegistry:
         """Return xAI function definitions for all registered tools."""
         return [entry.to_xai_definition() for entry in self._entries.values()]
 
+    def build_prompt_section(self) -> str:
+        """Return a system-prompt fragment describing when to call each tool."""
+        lines = ["Tool usage instructions:"]
+        for entry in self._entries.values():
+            lines.append(f"- {entry.name}: {entry.prompt_instructions}")
+        return "\n".join(lines)
+
     def execute(
         self, name: str, args: dict[str, Any], tool_config: dict[str, Any]
     ) -> str:
@@ -314,7 +321,7 @@ def build_voice_tool_registry() -> VoiceToolRegistry:
                     "and return a concise, voice-ready recommendation grounded in workforce frameworks."
                 ),
                 prompt_instructions=(
-                    "Call this after you have collected company size, primary problem, "
+                    "Call assess_employer_readiness tool after you have collected company size, primary problem, "
                     "partnership status, manager capacity, and workforce program experience. "
                     "Read the voice_response field directly to the caller."
                 ),
@@ -329,9 +336,13 @@ def build_voice_tool_registry() -> VoiceToolRegistry:
                     "and the session should close."
                 ),
                 prompt_instructions=(
-                    "Call this after you have delivered your closing line and the caller "
-                    "has indicated they are done (e.g. 'thank you', 'that's all', 'I'm all set'). "
-                    "Do not call this mid-conversation."
+                    "Call end_conversation tool immediately after detecting that the user is all set, "
+                    "and you delivered final remarks "
+                    "(e.g. 'have a great day', 'take care', 'glad I could help', "
+                    "'I'm still here if you need anything'). "
+                    "This includes follow-up responses after an interruption. "
+                    "If you have just said goodbye or a closing phrase of any kind, "
+                    "call this tool — do not wait for further confirmation. "
                 ),
                 implementation=end_conversation,
                 input_model=EndConversationInput,

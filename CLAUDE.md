@@ -52,6 +52,12 @@ Defaults:
 - Oracle service should be the `..._tp` service for the API workload
 - production database compatibility means Oracle compatibility
 
+## Oracle SQLAlchemy query rules
+
+- **Never use `.is_(True)` or `.is_(False)`** on boolean columns. Oracle only accepts `IS NULL` / `IS NOT NULL` after `IS`; `.is_(True)` generates `IS 1` which raises `ORA-00908`.
+- Use `== True` / `== False` instead — SQLAlchemy renders these as `= 1` / `= 0` for Oracle's NUMBER-backed booleans.
+- This applies to every `filter()` call on any boolean-mapped column across the entire codebase.
+
 ## Migration rules
 
 - Alembic is the migration system

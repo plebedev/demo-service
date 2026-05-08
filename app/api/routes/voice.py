@@ -40,7 +40,7 @@ from app.schemas.voice import (
     VoicePersonaUpdateRequest,
 )
 from app.services.voice.greeting import refresh_greeting_if_needed
-from app.services.voice.session import create_session, remove_session
+from app.services.voice.session import create_session, get_session, remove_session
 from app.services.voice.tools import VoiceToolRegistry, build_voice_tool_registry
 from app.services.voice.xai_client import XaiVoiceClient
 
@@ -103,7 +103,7 @@ def _get_active_persona_or_503(db: Session, experience_id: str) -> VoicePersona:
         db.query(VoicePersona)
         .filter(
             VoicePersona.experience_id == experience_id,
-            VoicePersona.is_active.is_(True),
+            VoicePersona.is_active == True,
         )
         .order_by(VoicePersona.id)
         .first()
@@ -204,11 +204,27 @@ async def voice_inbound(
 @router.websocket("/stream")
 async def voice_stream(
     websocket: WebSocket,
+    token: str | None = Query(default=None),
     settings: Settings = Depends(get_settings),
     db: Session = Depends(get_db_session),
 ) -> None:
-    """Bridge Twilio Media Streams audio to the xAI Voice Agent."""
+    """Bridge Twilio Media Streams (or browser test) audio to the xAI Voice Agent.
+
+    Real Twilio calls connect without a token (authenticated via the webhook
+    signature on /inbound).  Browser tests pass ?token=<access-token> to
+    authenticate directly.
+    """
     await websocket.accept()
+
+    if token is not None:
+        try:
+            claims = verify_access_token(token, settings)
+        except HTTPException:
+            await websocket.close(code=4001)
+            return
+        if claims.experience_id != ExperienceId.VOICE_DEMO:
+            await websocket.close(code=4003)
+            return
 
     if not settings.xai_api_key:
         logger.error("XAI_API_KEY not configured; closing voice stream")
@@ -224,7 +240,7 @@ async def voice_stream(
             api_key=settings.xai_api_key,
             model=settings.voice_xai_model,
         ) as xai:
-            await asyncio.gather(
+            input_task = asyncio.create_task(
                 _handle_twilio_messages(
                     websocket,
                     xai,
@@ -233,16 +249,27 @@ async def voice_stream(
                     call_sid_ref=call_sid_ref,
                     stream_sid_ref=stream_sid_ref,
                     pending_tool_calls=pending_tool_calls,
-                ),
+                )
+            )
+            output_task = asyncio.create_task(
                 _handle_xai_to_twilio(
                     websocket,
                     xai,
                     stream_sid_ref=stream_sid_ref,
                     call_sid_ref=call_sid_ref,
                     pending_tool_calls=pending_tool_calls,
-                ),
-                return_exceptions=True,
+                )
             )
+            done, pending = await asyncio.wait(
+                [input_task, output_task],
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            for task in pending:
+                task.cancel()
+                try:
+                    await task
+                except (asyncio.CancelledError, Exception):
+                    pass
     except WebSocketDisconnect:
         pass
     except Exception:
@@ -294,11 +321,15 @@ async def _handle_twilio_messages(
                 persona_tool_config=tool_config,
                 tool_registry=_voice_tool_registry,
             )
+            tool_prompt = _voice_tool_registry.build_prompt_section()
+            instructions = f"{persona.instructions}\n\n{tool_prompt}"
             await xai.configure_session(
-                instructions=persona.instructions,
+                instructions=instructions,
                 tools=_voice_tool_registry.xai_definitions(),
                 voice=voice_name,
+                audio_format={"type": "audio/pcmu", "rate": 8000},
             )
+            await xai.start_response()
             logger.info("Voice stream started: call=%s", call_sid)
 
         elif event == "media":
@@ -320,7 +351,11 @@ async def _handle_xai_to_twilio(
     call_sid_ref: list[str | None],
     pending_tool_calls: dict[str, dict[str, Any]],
 ) -> None:
-    """Receive xAI events and forward audio + tool results back to Twilio."""
+    """Receive xAI events and forward audio + transcripts + tool results to caller."""
+    close_after_response = False
+    current_response_id: str | None = None
+    cancelled_response_id: str | None = None
+
     while True:
         try:
             event = await xai.receive()
@@ -329,7 +364,21 @@ async def _handle_xai_to_twilio(
 
         event_type = event.get("type", "")
 
-        if event_type == "response.audio.delta":
+        if event_type == "input_audio_buffer.speech_started":
+            cancelled_response_id = current_response_id
+            await xai.cancel_response()
+            stream_sid = stream_sid_ref[0]
+            if stream_sid:
+                await ws.send_text(
+                    json.dumps({"event": "clear", "streamSid": stream_sid})
+                )
+
+        elif event_type == "response.output_audio.delta":
+            resp_id = event.get("response_id")
+            if resp_id is not None:
+                current_response_id = resp_id
+            if resp_id is not None and resp_id == cancelled_response_id:
+                continue
             audio_b64 = event.get("delta", "")
             stream_sid = stream_sid_ref[0]
             if audio_b64 and stream_sid:
@@ -343,6 +392,21 @@ async def _handle_xai_to_twilio(
                     )
                 )
 
+        elif event_type in (
+            "response.output_audio_transcript.delta",
+            "response.text.delta",
+        ):
+            await ws.send_text(
+                json.dumps({"event": "transcript", "text": event.get("delta", "")})
+            )
+
+        elif event_type == "conversation.item.input_audio_transcription.completed":
+            transcript = event.get("transcript", "")
+            if transcript:
+                await ws.send_text(
+                    json.dumps({"event": "user_transcript", "text": transcript})
+                )
+
         elif event_type == "response.function_call_arguments.delta":
             call_id = event.get("call_id", "")
             if call_id:
@@ -355,22 +419,46 @@ async def _handle_xai_to_twilio(
 
         elif event_type == "response.function_call_arguments.done":
             call_id = event.get("call_id", "")
-            if call_id and call_id in pending_tool_calls:
-                tool = pending_tool_calls.pop(call_id)
-                tool_name = tool["name"] or event.get("name", "")
-                args_json = event.get("arguments", tool["args_buf"])
+            if call_id:
+                tool = pending_tool_calls.pop(call_id, None)
+                tool_name = (tool["name"] if tool else None) or event.get("name", "")
+                args_json = (
+                    event.get("arguments") or (tool["args_buf"] if tool else "") or "{}"
+                )
+                logger.info(
+                    "Tool call: name=%s call_id=%s call=%s",
+                    tool_name,
+                    call_id,
+                    call_sid_ref[0],
+                )
                 try:
                     args: dict[str, Any] = json.loads(args_json)
                 except (json.JSONDecodeError, ValueError):
                     args = {}
+                try:
+                    entry = _voice_tool_registry.get(tool_name)
+                except KeyError:
+                    logger.warning("Unknown tool: %s", tool_name)
+                    continue
+                if entry.is_terminal:
+                    close_after_response = True
+                else:
+                    session = get_session(call_sid_ref[0] or "")
+                    tool_config = session.persona_tool_config if session else {}
+                    result = entry.execute(args, tool_config)
+                    await xai.send_tool_result(call_id, result)
 
-                # Retrieve tool_config from the active session
-                from app.services.voice.session import get_session
-
-                session = get_session(call_sid_ref[0] or "")
-                tool_config = session.persona_tool_config if session else {}
-                result = _voice_tool_registry.execute(tool_name, args, tool_config)
-                await xai.send_tool_result(call_id, result)
+        elif event_type == "response.done":
+            logger.info(
+                "response.done: close_after_response=%s call=%s",
+                close_after_response,
+                call_sid_ref[0],
+            )
+            if close_after_response:
+                await asyncio.sleep(0.4)
+                await ws.send_text(json.dumps({"event": "end"}))
+                await ws.close()
+                break
 
         elif event_type == "error":
             logger.error("xAI error event: %s", event.get("error", {}))
@@ -383,209 +471,6 @@ async def _ws_iter(ws: WebSocket):  # type: ignore[no-untyped-def]
             yield await ws.receive_text()
         except WebSocketDisconnect:
             return
-
-
-# ---------------------------------------------------------------------------
-# Browser WebSocket bridge (direct, no Twilio — for testing)
-# ---------------------------------------------------------------------------
-
-
-@router.websocket("/browser-stream")
-async def voice_browser_stream(
-    websocket: WebSocket,
-    token: str = Query(..., description="Access token for voice-demo experience"),
-    settings: Settings = Depends(get_settings),
-    db: Session = Depends(get_db_session),
-) -> None:
-    """Bridge browser microphone audio to xAI for testing without a phone call.
-
-    Protocol (JSON text frames):
-      Browser → backend: {"type": "audio", "data": "<base64 pcm16>"}
-      Backend → browser: {"type": "audio", "data": "<base64 pcm16>"}
-                         {"type": "transcript", "text": "..."}
-                         {"type": "error", "message": "..."}
-    """
-    await websocket.accept()
-
-    try:
-        claims = verify_access_token(token, settings)
-    except HTTPException:
-        await websocket.send_text(
-            json.dumps({"type": "error", "message": "Invalid or expired access token."})
-        )
-        await websocket.close(code=4001)
-        return
-
-    if claims.experience_id != ExperienceId.VOICE_DEMO:
-        await websocket.send_text(
-            json.dumps(
-                {
-                    "type": "error",
-                    "message": "Access token is not valid for this experience.",
-                }
-            )
-        )
-        await websocket.close(code=4003)
-        return
-
-    if not settings.xai_api_key:
-        await websocket.send_text(
-            json.dumps({"type": "error", "message": "XAI_API_KEY not configured"})
-        )
-        await websocket.close(code=1011)
-        return
-
-    try:
-        persona = _get_active_persona_or_503(db, ExperienceId.VOICE_DEMO)
-    except HTTPException as exc:
-        await websocket.send_text(json.dumps({"type": "error", "message": exc.detail}))
-        await websocket.close(code=1011)
-        return
-
-    voice_config = (
-        db.query(VoiceExperienceConfig)
-        .filter(VoiceExperienceConfig.experience_id == ExperienceId.VOICE_DEMO)
-        .first()
-    )
-    voice_name = voice_config.voice_name if voice_config else "Eve"
-
-    session_id = f"browser-{claims.token_id}"
-    tool_config = _load_tool_config(persona)
-    create_session(
-        session_id=session_id,
-        experience_id=ExperienceId.VOICE_DEMO,
-        persona_id=persona.id,
-        persona_instructions=persona.instructions,
-        persona_tool_config=tool_config,
-        tool_registry=_voice_tool_registry,
-    )
-
-    pending_tool_calls: dict[str, dict[str, Any]] = {}
-
-    try:
-        async with XaiVoiceClient(
-            api_key=settings.xai_api_key,
-            model=settings.voice_xai_model,
-        ) as xai:
-            await xai.configure_session(
-                instructions=persona.instructions,
-                tools=_voice_tool_registry.xai_definitions(),
-                voice=voice_name,
-            )
-            await xai.start_response()
-            input_task = asyncio.create_task(_handle_browser_input(websocket, xai))
-            output_task = asyncio.create_task(
-                _handle_browser_output(websocket, xai, tool_config, pending_tool_calls)
-            )
-            done, pending = await asyncio.wait(
-                [input_task, output_task],
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-            for task in pending:
-                task.cancel()
-                try:
-                    await task
-                except (asyncio.CancelledError, Exception):
-                    pass
-    except WebSocketDisconnect:
-        pass
-    except Exception:
-        logger.exception(
-            "Unexpected error in browser voice stream session=%s", session_id
-        )
-    finally:
-        remove_session(session_id)
-
-
-async def _handle_browser_input(ws: WebSocket, xai: XaiVoiceClient) -> None:
-    """Forward browser audio frames to xAI."""
-    async for raw in _ws_iter(ws):
-        try:
-            msg = json.loads(raw)
-        except (json.JSONDecodeError, ValueError):
-            continue
-        if msg.get("type") == "audio":
-            await xai.send_audio(msg.get("data", ""))
-
-
-async def _handle_browser_output(
-    ws: WebSocket,
-    xai: XaiVoiceClient,
-    tool_config: dict[str, Any],
-    pending_tool_calls: dict[str, dict[str, Any]],
-) -> None:
-    """Forward xAI events back to the browser."""
-    close_after_response = False
-
-    while True:
-        try:
-            event = await xai.receive()
-        except Exception:
-            break
-
-        event_type = event.get("type", "")
-
-        if event_type == "response.output_audio.delta":
-            await ws.send_text(
-                json.dumps({"type": "audio", "data": event.get("delta", "")})
-            )
-
-        elif event_type in (
-            "response.output_audio_transcript.delta",
-            "response.text.delta",
-        ):
-            await ws.send_text(
-                json.dumps({"type": "transcript", "text": event.get("delta", "")})
-            )
-
-        elif event_type == "response.function_call_arguments.delta":
-            call_id = event.get("call_id", "")
-            if call_id:
-                if call_id not in pending_tool_calls:
-                    pending_tool_calls[call_id] = {
-                        "name": event.get("name", ""),
-                        "args_buf": "",
-                    }
-                pending_tool_calls[call_id]["args_buf"] += event.get("delta", "")
-
-        elif event_type == "response.function_call_arguments.done":
-            call_id = event.get("call_id", "")
-            if call_id and call_id in pending_tool_calls:
-                tool = pending_tool_calls.pop(call_id)
-                tool_name = tool["name"] or event.get("name", "")
-                args_json = event.get("arguments", tool["args_buf"])
-                try:
-                    args: dict[str, Any] = json.loads(args_json)
-                except (json.JSONDecodeError, ValueError):
-                    args = {}
-                entry = _voice_tool_registry.get(tool_name)
-                if entry.is_terminal:
-                    close_after_response = True
-                else:
-                    result = entry.execute(args, tool_config)
-                    await xai.send_tool_result(call_id, result)
-
-        elif event_type == "conversation.item.input_audio_transcription.completed":
-            transcript = event.get("transcript", "")
-            if transcript:
-                await ws.send_text(
-                    json.dumps({"type": "user_transcript", "text": transcript})
-                )
-
-        elif event_type == "response.done":
-            if close_after_response:
-                # Short drain: xAI may still have audio deltas in-flight when
-                # response.done arrives. Let them land before signalling close.
-                await asyncio.sleep(0.4)
-                await ws.send_text(json.dumps({"type": "end"}))
-                await ws.close()
-                break
-
-        elif event_type == "error":
-            logger.error("xAI error in browser session: %s", event.get("error", {}))
-            await ws.send_text(
-                json.dumps({"type": "error", "message": str(event.get("error", {}))})
-            )
 
 
 # ---------------------------------------------------------------------------
@@ -652,7 +537,7 @@ def list_voice_personas(
         db.query(VoicePersona)
         .filter(
             VoicePersona.experience_id == _EXPERIENCE_ID,
-            VoicePersona.is_active.is_(True),
+            VoicePersona.is_active == True,
         )
         .order_by(VoicePersona.id)
         .all()
@@ -675,7 +560,7 @@ def create_voice_persona(
         .filter(
             VoicePersona.experience_id == _EXPERIENCE_ID,
             VoicePersona.name_key == name_key,
-            VoicePersona.is_active.is_(True),
+            VoicePersona.is_active == True,
         )
         .first()
     )
@@ -842,7 +727,7 @@ def admin_list_personas(
         db.query(VoicePersona)
         .filter(
             VoicePersona.experience_id == experience_id,
-            VoicePersona.is_active.is_(True),
+            VoicePersona.is_active == True,
         )
         .order_by(VoicePersona.id)
         .all()
@@ -869,7 +754,7 @@ def admin_create_persona(
         .filter(
             VoicePersona.experience_id == experience_id,
             VoicePersona.name_key == name_key,
-            VoicePersona.is_active.is_(True),
+            VoicePersona.is_active == True,
         )
         .first()
     )

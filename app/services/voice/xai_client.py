@@ -47,10 +47,10 @@ class XaiVoiceClient:
         instructions: str,
         tools: list[dict[str, Any]],
         voice: str = "Eve",
-        sample_rate: int = 24000,
+        audio_format: dict[str, Any] | None = None,
     ) -> None:
         """Send session.update to configure the voice agent."""
-        audio_format = {"type": "audio/pcm", "rate": sample_rate}
+        audio_format = audio_format or {"type": "audio/pcm", "rate": 24000}
         await self._send(
             {
                 "type": "session.update",
@@ -75,6 +75,10 @@ class XaiVoiceClient:
     async def start_response(self) -> None:
         """Trigger the agent to generate its opening turn."""
         await self._send({"type": "response.create"})
+
+    async def cancel_response(self) -> None:
+        """Cancel the in-progress response (barge-in)."""
+        await self._send({"type": "response.cancel"})
 
     async def send_audio(self, audio_b64: str) -> None:
         """Append a base64-encoded audio chunk to the input buffer."""
