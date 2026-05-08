@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import require_experience_access
 from app.core.config import get_settings
 from app.core.experiences import ExperienceId
+from app.core.security import AccessTokenClaims
 from app.db.session import get_db_session
 from app.schemas.run_events import RunEventResponse
 from app.schemas.runs import (
@@ -52,30 +53,38 @@ from app.services.workflow_executor import (
     get_run_events,
 )
 
-router = APIRouter(
-    prefix="/api/runs",
-    tags=["runs"],
-    dependencies=[Depends(require_experience_access(ExperienceId.MESSY_NOTES))],
-)
+router = APIRouter(prefix="/api/runs", tags=["runs"])
+messy_notes_access = require_experience_access(ExperienceId.MESSY_NOTES)
 
 
 @router.get("", response_model=RunListResponse)
-def list_runs_route(db: Session = Depends(get_db_session)) -> RunListResponse:
+def list_runs_route(
+    claims: AccessTokenClaims = Depends(messy_notes_access),
+    db: Session = Depends(get_db_session),
+) -> RunListResponse:
     """Return newest-first run history for the protected demo shell."""
-    return serialize_run_list(list_runs(db), db)
+    return serialize_run_list(
+        list_runs(db, invitation_code_id=claims.invitation_code_id), db
+    )
 
 
 @router.post("", response_model=RunResponse, status_code=status.HTTP_201_CREATED)
 def create_run_route(
     payload: RunCreateRequest,
+    claims: AccessTokenClaims = Depends(messy_notes_access),
     db: Session = Depends(get_db_session),
 ) -> RunResponse:
     """Create a new draft run."""
-    return serialize_run(create_run(db, payload), db)
+    return serialize_run(
+        create_run(db, payload, invitation_code_id=claims.invitation_code_id),
+        db,
+    )
 
 
 @router.get("/samples", response_model=SampleChaosListResponse)
-def list_sample_chaos_route() -> SampleChaosListResponse:
+def list_sample_chaos_route(
+    _: AccessTokenClaims = Depends(messy_notes_access),
+) -> SampleChaosListResponse:
     """Return curated sample note sets for the demo."""
     return SampleChaosListResponse(samples=list_sample_chaos_sets())
 
@@ -83,6 +92,7 @@ def list_sample_chaos_route() -> SampleChaosListResponse:
 @router.post("/sms-status", response_model=SmsPhoneStatusResponse)
 def sms_phone_status_route(
     payload: SmsPhoneStatusRequest,
+    _: AccessTokenClaims = Depends(messy_notes_access),
     db: Session = Depends(get_db_session),
 ) -> SmsPhoneStatusResponse:
     """Return phone validity and permanent opt-out status for the UI."""
@@ -90,19 +100,27 @@ def sms_phone_status_route(
 
 
 @router.get("/{run_id}", response_model=RunResponse)
-def get_run_route(run_id: int, db: Session = Depends(get_db_session)) -> RunResponse:
+def get_run_route(
+    run_id: int,
+    claims: AccessTokenClaims = Depends(messy_notes_access),
+    db: Session = Depends(get_db_session),
+) -> RunResponse:
     """Return one persisted run."""
-    return serialize_run(get_run_or_404(db, run_id), db)
+    return serialize_run(
+        get_run_or_404(db, run_id, invitation_code_id=claims.invitation_code_id),
+        db,
+    )
 
 
 @router.put("/{run_id}", response_model=RunResponse)
 def update_run_route(
     run_id: int,
     payload: RunUpdateRequest,
+    claims: AccessTokenClaims = Depends(messy_notes_access),
     db: Session = Depends(get_db_session),
 ) -> RunResponse:
     """Update the editable draft fields of a run."""
-    run = get_run_or_404(db, run_id)
+    run = get_run_or_404(db, run_id, invitation_code_id=claims.invitation_code_id)
     return serialize_run(update_run_draft(db, run, payload), db)
 
 
@@ -110,10 +128,11 @@ def update_run_route(
 def apply_sample_chaos_route(
     run_id: int,
     payload: SampleChaosApplyRequest,
+    claims: AccessTokenClaims = Depends(messy_notes_access),
     db: Session = Depends(get_db_session),
 ) -> RunResponse:
     """Load a curated sample chaos set into a draft run."""
-    run = get_run_or_404(db, run_id)
+    run = get_run_or_404(db, run_id, invitation_code_id=claims.invitation_code_id)
     return serialize_run(apply_sample_chaos_to_run(db, run, payload.sample_key), db)
 
 
@@ -121,10 +140,11 @@ def apply_sample_chaos_route(
 def notification_preference_route(
     run_id: int,
     payload: NotificationPreferenceRequest,
+    claims: AccessTokenClaims = Depends(messy_notes_access),
     db: Session = Depends(get_db_session),
 ) -> RunResponse:
     """Capture optional future SMS completion notification preference."""
-    run = get_run_or_404(db, run_id)
+    run = get_run_or_404(db, run_id, invitation_code_id=claims.invitation_code_id)
     return serialize_run(capture_notification_preference(db, run, payload), db)
 
 
@@ -132,10 +152,11 @@ def notification_preference_route(
 def follow_up_route(
     run_id: int,
     payload: FollowUpRequest,
+    claims: AccessTokenClaims = Depends(messy_notes_access),
     db: Session = Depends(get_db_session),
 ) -> RunResponse:
     """Answer the one guarded follow-up question for a completed run."""
-    run = get_run_or_404(db, run_id)
+    run = get_run_or_404(db, run_id, invitation_code_id=claims.invitation_code_id)
     return serialize_run(answer_follow_up(db, run, payload), db)
 
 
@@ -145,10 +166,11 @@ async def ingest_run_route(
     title: Annotated[str | None, Form()] = None,
     input_text: Annotated[str | None, Form()] = None,
     files: Annotated[list[UploadFile], File()] = [],
+    claims: AccessTokenClaims = Depends(messy_notes_access),
     db: Session = Depends(get_db_session),
 ) -> RunResponse:
     """Normalize pasted text and uploads for a draft run."""
-    run = get_run_or_404(db, run_id)
+    run = get_run_or_404(db, run_id, invitation_code_id=claims.invitation_code_id)
     updated = await ingest_run_draft(
         db,
         run,
@@ -164,10 +186,11 @@ async def submit_run_route(
     run_id: int,
     request: Request,
     payload: RunSubmitRequest | None = None,
+    claims: AccessTokenClaims = Depends(messy_notes_access),
     db: Session = Depends(get_db_session),
 ) -> RunResponse:
     """Submit and synchronously execute a run through the bounded workflow."""
-    run = get_run_or_404(db, run_id)
+    run = get_run_or_404(db, run_id, invitation_code_id=claims.invitation_code_id)
     submitted = submit_run(db, run, payload)
     executed = await execute_run_workflow(
         db,
@@ -183,10 +206,11 @@ async def submit_run_route(
 async def execute_run_route(
     run_id: int,
     request: Request,
+    claims: AccessTokenClaims = Depends(messy_notes_access),
     db: Session = Depends(get_db_session),
 ) -> RunResponse:
     """Execute an existing draft/submitted/failed run."""
-    run = get_run_or_404(db, run_id)
+    run = get_run_or_404(db, run_id, invitation_code_id=claims.invitation_code_id)
     executed = await execute_run_workflow(
         db,
         run,
@@ -200,18 +224,20 @@ async def execute_run_route(
 @router.get("/{run_id}/events", response_model=list[RunEventResponse])
 def list_run_events_route(
     run_id: int,
+    claims: AccessTokenClaims = Depends(messy_notes_access),
     db: Session = Depends(get_db_session),
 ) -> list[RunEventResponse]:
     """Return structured execution events for a run."""
-    run = get_run_or_404(db, run_id)
+    run = get_run_or_404(db, run_id, invitation_code_id=claims.invitation_code_id)
     return [serialize_run_event(event) for event in get_run_events(db, run.id)]
 
 
 @router.get("/{run_id}/summary", response_model=RunExecutionSummary)
 def get_run_execution_summary_route(
     run_id: int,
+    claims: AccessTokenClaims = Depends(messy_notes_access),
     db: Session = Depends(get_db_session),
 ) -> RunExecutionSummary:
     """Return a compact execution summary for demos and debugging."""
-    run = get_run_or_404(db, run_id)
+    run = get_run_or_404(db, run_id, invitation_code_id=claims.invitation_code_id)
     return build_run_execution_summary(db, run)

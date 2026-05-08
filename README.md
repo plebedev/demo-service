@@ -237,6 +237,26 @@ task lint
 task build
 ```
 
+## Messy Notes run namespace
+
+Messy Notes runs are scoped by the invitation code embedded in the signed access
+token. New `/api/runs/*` rows store `runs.invitation_code_id`; protected run
+lookups return rows for the caller's invite code plus legacy rows where
+`invitation_code_id` is still `NULL`.
+
+Legacy `NULL` rows are a compatibility bridge for runs created before
+invite-code namespacing. To assign those rows once production ownership is
+known, inspect the messy-notes invitation codes and update the legacy rows to
+the chosen code id:
+
+```sql
+SELECT id, code, label FROM invitation_codes WHERE label = 'messy-notes';
+UPDATE runs SET invitation_code_id = <chosen_id> WHERE invitation_code_id IS NULL;
+```
+
+A later migration can make `runs.invitation_code_id` non-null after all legacy
+rows have been assigned.
+
 ## M3 ingestion behavior
 
 The run-ingestion endpoint accepts:
