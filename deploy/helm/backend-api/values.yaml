@@ -16,7 +16,8 @@ ingress:
   enabled: false
   className: traefik
   annotations: {}
-  paths: []
+  path: /api
+  pathType: Prefix
 
 # Exposes only the two Twilio-facing voice endpoints publicly.
 # The rest of the backend API remains internal (cluster DNS only).
