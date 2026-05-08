@@ -8,6 +8,7 @@ import hashlib
 import hmac
 import json
 import logging
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
@@ -30,8 +31,15 @@ from app.core.config import Settings, get_settings
 from app.core.experiences import ExperienceId
 from app.core.security import AccessTokenClaims, verify_access_token
 from app.db.session import get_db_session
-from app.models.voice import VoiceExperienceConfig, VoicePersona
+from app.models.voice import (
+    VoiceConversationRecord,
+    VoiceExperienceConfig,
+    VoicePersona,
+)
 from app.schemas.voice import (
+    VoiceConversationDetail,
+    VoiceConversationListResponse,
+    VoiceConversationSummary,
     VoiceExperienceConfigResponse,
     VoiceExperienceConfigUpsertRequest,
     VoicePersonaCreateRequest,
@@ -42,6 +50,7 @@ from app.schemas.voice import (
     VoiceProvidersResponse,
 )
 from app.services.voice.base_client import VoiceClient
+from app.services.voice.cost import estimate_cost
 from app.services.voice.factory import get_voice_client
 from app.services.voice.greeting import refresh_greeting_if_needed
 from app.services.voice.session import create_session, get_session, remove_session
@@ -73,12 +82,80 @@ voice_access = require_experience_access(ExperienceId.VOICE_DEMO)
 
 
 # ---------------------------------------------------------------------------
+# Conversation accumulator — in-memory state for one WebSocket session
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ConversationAccumulator:
+    """Tracks transcript entries and audio byte counts for a single session."""
+
+    started_at: datetime
+    provider: str
+    voice: str
+    transcript: list[dict[str, Any]] = field(default_factory=list)
+    input_audio_bytes: int = 0
+    output_audio_bytes: int = 0
+
+
+def _acc_transcript(acc: ConversationAccumulator, role: str, delta: str) -> None:
+    """Append delta to the last entry if same role, otherwise start a new entry."""
+    if acc.transcript and acc.transcript[-1]["role"] == role:
+        acc.transcript[-1]["text"] += delta
+    else:
+        acc.transcript.append({"role": role, "text": delta})
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 
 def _normalize_name(name: str) -> str:
     return " ".join(name.strip().split()).lower()
+
+
+def _serialize_history_summary(
+    rec: VoiceConversationRecord,
+) -> VoiceConversationSummary:
+    try:
+        entries: list[Any] = json.loads(rec.transcript_json)
+    except (json.JSONDecodeError, ValueError):
+        entries = []
+    return VoiceConversationSummary(
+        id=rec.id,
+        call_sid=rec.call_sid,
+        provider=rec.provider,
+        voice=rec.voice,
+        started_at=rec.started_at,
+        ended_at=rec.ended_at,
+        duration_seconds=rec.duration_seconds,
+        input_audio_seconds=rec.input_audio_seconds,
+        output_audio_seconds=rec.output_audio_seconds,
+        estimated_cost_usd=rec.estimated_cost_usd,
+        entry_count=len(entries),
+    )
+
+
+def _serialize_history_detail(rec: VoiceConversationRecord) -> VoiceConversationDetail:
+    try:
+        transcript: list[dict[str, Any]] = json.loads(rec.transcript_json)
+    except (json.JSONDecodeError, ValueError):
+        transcript = []
+    return VoiceConversationDetail(
+        id=rec.id,
+        call_sid=rec.call_sid,
+        provider=rec.provider,
+        voice=rec.voice,
+        started_at=rec.started_at,
+        ended_at=rec.ended_at,
+        duration_seconds=rec.duration_seconds,
+        input_audio_seconds=rec.input_audio_seconds,
+        output_audio_seconds=rec.output_audio_seconds,
+        estimated_cost_usd=rec.estimated_cost_usd,
+        entry_count=len(transcript),
+        transcript=transcript,
+    )
 
 
 def _serialize_persona(persona: VoicePersona) -> VoicePersonaResponse:
@@ -257,6 +334,7 @@ async def voice_stream(
 
     call_sid_ref: list[str | None] = [None]
     stream_sid_ref: list[str | None] = [None]
+    conv_ref: list[ConversationAccumulator | None] = [None]
     pending_tool_calls: dict[str, dict[str, Any]] = {}
 
     try:
@@ -269,6 +347,7 @@ async def voice_stream(
                     settings,
                     call_sid_ref=call_sid_ref,
                     stream_sid_ref=stream_sid_ref,
+                    conv_ref=conv_ref,
                     pending_tool_calls=pending_tool_calls,
                 )
             )
@@ -278,6 +357,7 @@ async def voice_stream(
                     vc,
                     stream_sid_ref=stream_sid_ref,
                     call_sid_ref=call_sid_ref,
+                    conv_ref=conv_ref,
                     pending_tool_calls=pending_tool_calls,
                 )
             )
@@ -300,6 +380,40 @@ async def voice_stream(
     finally:
         if call_sid_ref[0]:
             remove_session(call_sid_ref[0])
+        if conv_ref[0] is not None and call_sid_ref[0]:
+            acc = conv_ref[0]
+            ended_at = datetime.now(UTC)
+            wall_secs = (ended_at - acc.started_at).total_seconds()
+            input_secs = acc.input_audio_bytes / 8000.0
+            output_secs = acc.output_audio_bytes / 8000.0
+            cost = estimate_cost(acc.provider, wall_secs)
+            try:
+                record = VoiceConversationRecord(
+                    experience_id=ExperienceId.VOICE_DEMO,
+                    call_sid=call_sid_ref[0],
+                    provider=acc.provider,
+                    voice=acc.voice,
+                    started_at=acc.started_at,
+                    ended_at=ended_at,
+                    duration_seconds=round(wall_secs, 3),
+                    input_audio_seconds=round(input_secs, 3),
+                    output_audio_seconds=round(output_secs, 3),
+                    estimated_cost_usd=cost,
+                    transcript_json=json.dumps(acc.transcript),
+                )
+                db.add(record)
+                db.commit()
+                logger.info(
+                    "Conversation persisted: call=%s duration=%.1fs cost=$%.4f",
+                    call_sid_ref[0],
+                    wall_secs,
+                    cost,
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to persist conversation history for call %s",
+                    call_sid_ref[0],
+                )
 
 
 async def _handle_twilio_messages(
@@ -309,6 +423,7 @@ async def _handle_twilio_messages(
     settings: Settings,
     call_sid_ref: list[str | None],
     stream_sid_ref: list[str | None],
+    conv_ref: list[ConversationAccumulator | None],
     pending_tool_calls: dict[str, dict[str, Any]],
 ) -> None:
     """Receive Twilio Media Streams events and forward audio to the voice provider."""
@@ -333,6 +448,12 @@ async def _handle_twilio_messages(
                 .first()
             )
             voice = voice_cfg.voice_name if voice_cfg else "eve"
+            # Resolve the effective provider so it can be stored in history.
+            resolved_provider = (
+                voice_cfg.voice_provider
+                if voice_cfg and voice_cfg.voice_provider
+                else settings.voice_provider
+            )
             tool_config = _load_tool_config(persona)
             create_session(
                 session_id=call_sid,
@@ -341,6 +462,11 @@ async def _handle_twilio_messages(
                 persona_instructions=persona.instructions,
                 persona_tool_config=tool_config,
                 tool_registry=_voice_tool_registry,
+            )
+            conv_ref[0] = ConversationAccumulator(
+                started_at=datetime.now(UTC),
+                provider=resolved_provider,
+                voice=voice,
             )
             tool_prompt = _voice_tool_registry.build_prompt_section()
             instructions = f"{persona.instructions}\n\n{tool_prompt}"
@@ -357,6 +483,11 @@ async def _handle_twilio_messages(
             payload = msg.get("media", {}).get("payload", "")
             if payload:
                 await vc.send_audio(payload)
+                if conv_ref[0] is not None:
+                    try:
+                        conv_ref[0].input_audio_bytes += len(base64.b64decode(payload))
+                    except Exception:
+                        pass
 
         elif event == "stop":
             if call_sid_ref[0]:
@@ -370,12 +501,14 @@ async def _handle_xai_to_twilio(
     vc: VoiceClient,
     stream_sid_ref: list[str | None],
     call_sid_ref: list[str | None],
+    conv_ref: list[ConversationAccumulator | None],
     pending_tool_calls: dict[str, dict[str, Any]],
 ) -> None:
     """Receive voice provider events and forward audio + transcripts + tool results to caller."""
     close_after_response = False
     current_response_id: str | None = None
     cancelled_response_id: str | None = None
+    response_active = False  # True only while a response is in progress
 
     while True:
         try:
@@ -385,9 +518,23 @@ async def _handle_xai_to_twilio(
 
         event_type = event.get("type", "")
 
-        if event_type == "input_audio_buffer.speech_started":
-            cancelled_response_id = current_response_id
-            await vc.cancel_response()
+        if event_type == "response.created":
+            # Track the new response id so we know something is active.
+            resp = event.get("response", {})
+            resp_id = resp.get("id") if isinstance(resp, dict) else None
+            if resp_id:
+                current_response_id = resp_id
+            response_active = True
+
+        elif event_type == "input_audio_buffer.speech_started":
+            if response_active:
+                # Only cancel — and only mark as cancelled — when a response is
+                # actually in progress.  Sending response.cancel when nothing is
+                # active produces a response_cancel_not_active error from OpenAI
+                # and, worse, sets cancelled_response_id to the NEXT response's
+                # id, silently filtering its audio and freezing the conversation.
+                cancelled_response_id = current_response_id
+                await vc.cancel_response()
             stream_sid = stream_sid_ref[0]
             if stream_sid:
                 await ws.send_text(
@@ -412,14 +559,20 @@ async def _handle_xai_to_twilio(
                         }
                     )
                 )
+            if audio_b64 and conv_ref[0] is not None:
+                try:
+                    conv_ref[0].output_audio_bytes += len(base64.b64decode(audio_b64))
+                except Exception:
+                    pass
 
         elif event_type in (
             "response.output_audio_transcript.delta",
             "response.text.delta",
         ):
-            await ws.send_text(
-                json.dumps({"event": "transcript", "text": event.get("delta", "")})
-            )
+            delta = event.get("delta", "")
+            await ws.send_text(json.dumps({"event": "transcript", "text": delta}))
+            if delta and conv_ref[0] is not None:
+                _acc_transcript(conv_ref[0], "advisor", delta)
 
         elif event_type == "conversation.item.input_audio_transcription.completed":
             transcript = event.get("transcript", "")
@@ -427,6 +580,8 @@ async def _handle_xai_to_twilio(
                 await ws.send_text(
                     json.dumps({"event": "user_transcript", "text": transcript})
                 )
+                if conv_ref[0] is not None:
+                    conv_ref[0].transcript.append({"role": "user", "text": transcript})
 
         elif event_type == "response.function_call_arguments.delta":
             call_id = event.get("call_id", "")
@@ -461,6 +616,10 @@ async def _handle_xai_to_twilio(
                         {"event": "tool_call", "tool_name": tool_name, "args": args}
                     )
                 )
+                if conv_ref[0] is not None:
+                    conv_ref[0].transcript.append(
+                        {"role": "tool_call", "tool_name": tool_name, "args": args}
+                    )
                 try:
                     entry = _voice_tool_registry.get(tool_name)
                 except KeyError:
@@ -475,6 +634,7 @@ async def _handle_xai_to_twilio(
                     await vc.send_tool_result(call_id, result)
 
         elif event_type == "response.done":
+            response_active = False
             logger.info(
                 "response.done: close_after_response=%s call=%s",
                 close_after_response,
@@ -522,6 +682,40 @@ def list_voice_providers(
             for pid, voices in _PROVIDER_VOICES.items()
         ]
     )
+
+
+@router.get("/history", response_model=VoiceConversationListResponse)
+def list_conversation_history(
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    claims: AccessTokenClaims = Depends(voice_access),
+    db: Session = Depends(get_db_session),
+) -> VoiceConversationListResponse:
+    """Return a paginated list of past voice conversations (no transcript body)."""
+    records = (
+        db.query(VoiceConversationRecord)
+        .filter(VoiceConversationRecord.experience_id == _EXPERIENCE_ID)
+        .order_by(VoiceConversationRecord.started_at.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+    return VoiceConversationListResponse(
+        conversations=[_serialize_history_summary(r) for r in records]
+    )
+
+
+@router.get("/history/{record_id}", response_model=VoiceConversationDetail)
+def get_conversation_detail(
+    record_id: int,
+    claims: AccessTokenClaims = Depends(voice_access),
+    db: Session = Depends(get_db_session),
+) -> VoiceConversationDetail:
+    """Return a single conversation record including the full transcript."""
+    record = db.get(VoiceConversationRecord, record_id)
+    if record is None or record.experience_id != _EXPERIENCE_ID:
+        raise HTTPException(status_code=404, detail="Conversation not found.")
+    return _serialize_history_detail(record)
 
 
 @router.get("/config", response_model=VoiceExperienceConfigResponse)

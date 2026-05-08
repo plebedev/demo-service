@@ -1,6 +1,7 @@
 """Pydantic schemas for voice experience admin and configuration APIs."""
 
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -125,3 +126,39 @@ class VoiceProvidersResponse(BaseModel):
     """List of available voice providers and their voices."""
 
     providers: list[VoiceProviderInfo]
+
+
+class VoiceConversationSummary(BaseModel):
+    """Metadata for a completed voice conversation (no transcript blob)."""
+
+    id: int = Field(description="Database ID")
+    call_sid: str = Field(description="Browser UUID or Twilio CallSid")
+    provider: str = Field(description="Voice provider used ('xai' or 'openai')")
+    voice: str = Field(description="Provider API voice identifier")
+    started_at: datetime = Field(description="When the conversation started")
+    ended_at: datetime | None = Field(description="When the conversation ended")
+    duration_seconds: float | None = Field(description="Wall-clock duration in seconds")
+    input_audio_seconds: float | None = Field(
+        description="Seconds of audio from the user"
+    )
+    output_audio_seconds: float | None = Field(
+        description="Seconds of audio from the advisor"
+    )
+    estimated_cost_usd: float | None = Field(
+        description="Duration-based cost estimate in USD"
+    )
+    entry_count: int = Field(description="Number of transcript entries")
+
+
+class VoiceConversationDetail(VoiceConversationSummary):
+    """Full conversation record including the transcript entries."""
+
+    transcript: list[dict[str, Any]] = Field(
+        description="Transcript entries (role + text, or role + tool_name + args)"
+    )
+
+
+class VoiceConversationListResponse(BaseModel):
+    """Paginated list of voice conversation summaries."""
+
+    conversations: list[VoiceConversationSummary]

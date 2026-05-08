@@ -8,6 +8,14 @@ import websockets.asyncio.client
 
 from app.services.voice.base_client import VoiceClient
 
+# OpenAI uses slightly different event type names for audio output than xAI.
+# Normalize them here so _handle_xai_to_twilio stays provider-agnostic.
+_OPENAI_EVENT_REMAP: dict[str, str] = {
+    "response.audio.delta": "response.output_audio.delta",
+    "response.audio_transcript.delta": "response.output_audio_transcript.delta",
+    "response.audio_transcript.done": "response.output_audio_transcript.done",
+}
+
 _OPENAI_REALTIME_BASE = "wss://api.openai.com/v1/realtime"
 
 # Maps the nested xAI/Twilio audio format type to OpenAI's flat format string.
@@ -64,3 +72,11 @@ class OpenAiVoiceClient(VoiceClient):
                 },
             }
         )
+
+    async def receive(self) -> dict[str, Any]:
+        """Receive next event, remapping OpenAI audio event names to xAI-style names."""
+        event = await super().receive()
+        remapped = _OPENAI_EVENT_REMAP.get(event.get("type", ""))
+        if remapped:
+            return {**event, "type": remapped}
+        return event

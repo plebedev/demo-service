@@ -5,7 +5,14 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from app.models.voice import VoiceExperienceConfig, VoicePersona
+import json
+from datetime import UTC, datetime
+
+from app.models.voice import (
+    VoiceConversationRecord,
+    VoiceExperienceConfig,
+    VoicePersona,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -133,7 +140,9 @@ def test_voice_config_returns_404_when_not_initialized(client: TestClient) -> No
 def test_voice_config_put_creates_config(client: TestClient) -> None:
     """PUT /api/voice/config creates a config and returns the created record."""
     headers = voice_access_headers(client, "config-create-code")
-    payload = create_voice_config(client, headers, voice_name="eve", voice_provider="xai")
+    payload = create_voice_config(
+        client, headers, voice_name="eve", voice_provider="xai"
+    )
 
     assert payload["voice_name"] == "eve"
     assert payload["voice_provider"] == "xai"
@@ -201,7 +210,14 @@ def test_list_voice_providers_returns_all_providers(client: TestClient) -> None:
 
     openai = next(p for p in data["providers"] if p["provider_id"] == "openai")
     assert openai["provider_name"] == "OpenAI"
-    assert set(openai["voices"]) == {"alloy", "echo", "fable", "onyx", "nova", "shimmer"}
+    assert set(openai["voices"]) == {
+        "alloy",
+        "echo",
+        "fable",
+        "onyx",
+        "nova",
+        "shimmer",
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -518,3 +534,117 @@ def test_record_answer_tool_definition_has_required_fields() -> None:
     assert "question" in props
     assert "user_response" in props
     assert "derived_answer" in props
+
+
+# ---------------------------------------------------------------------------
+# Cost estimation unit tests
+# ---------------------------------------------------------------------------
+
+
+def test_estimate_cost_xai() -> None:
+    """xAI rate: $3/hr = $0.000833/s."""
+    from app.services.voice.cost import estimate_cost
+
+    cost = estimate_cost("xai", 3600.0)
+    assert abs(cost - 3.0) < 0.001  # one hour should be ~$3.00
+
+
+def test_estimate_cost_xai_short_session() -> None:
+    """xAI cost scales linearly with duration."""
+    from app.services.voice.cost import estimate_cost
+
+    cost_60s = estimate_cost("xai", 60.0)
+    assert abs(cost_60s - 0.05) < 0.001  # 1 minute ≈ $0.05
+
+
+def test_estimate_cost_openai() -> None:
+    """OpenAI midpoint rate: $0.225/min = $0.00375/s."""
+    from app.services.voice.cost import estimate_cost
+
+    cost = estimate_cost("openai", 60.0)
+    assert abs(cost - 0.225) < 0.001  # 1 minute ≈ $0.225
+
+
+def test_estimate_cost_unknown_provider_returns_zero() -> None:
+    """Unknown provider returns 0.0."""
+    from app.services.voice.cost import estimate_cost
+
+    assert estimate_cost("unknown_provider", 100.0) == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Conversation history endpoints
+# ---------------------------------------------------------------------------
+
+
+def test_voice_history_requires_access_token(client: TestClient) -> None:
+    """GET /api/voice/history returns 401 without a token."""
+    response = client.get("/api/voice/history")
+    assert response.status_code == 401
+
+
+def test_voice_history_returns_empty_list_initially(client: TestClient) -> None:
+    """GET /api/voice/history returns an empty list when no records exist."""
+    headers = voice_access_headers(client, "hist-code-1")
+    response = client.get("/api/voice/history", headers=headers)
+    assert response.status_code == 200
+    assert response.json() == {"conversations": []}
+
+
+def test_voice_history_detail_returns_404_for_missing(client: TestClient) -> None:
+    """GET /api/voice/history/{id} returns 404 for a non-existent record."""
+    headers = voice_access_headers(client, "hist-code-2")
+    response = client.get("/api/voice/history/99999", headers=headers)
+    assert response.status_code == 404
+
+
+def test_voice_history_stores_and_retrieves_record(
+    client: TestClient, db_session: Session
+) -> None:
+    """Directly insert a VoiceConversationRecord; verify list + detail endpoints."""
+    transcript = [
+        {"role": "advisor", "text": "Hello, how can I help?"},
+        {"role": "user", "text": "I have a question."},
+        {
+            "role": "tool_call",
+            "tool_name": "record_answer",
+            "args": {"question": "q", "user_response": "r", "derived_answer": "d"},
+        },
+    ]
+    record = VoiceConversationRecord(
+        experience_id="voice-demo",
+        call_sid="test-call-sid-history-001",
+        provider="xai",
+        voice="eve",
+        started_at=datetime(2026, 5, 9, 10, 0, 0, tzinfo=UTC),
+        ended_at=datetime(2026, 5, 9, 10, 1, 30, tzinfo=UTC),
+        duration_seconds=90.0,
+        input_audio_seconds=40.0,
+        output_audio_seconds=50.0,
+        estimated_cost_usd=round(90.0 * 3.0 / 3600, 6),
+        transcript_json=json.dumps(transcript),
+    )
+    db_session.add(record)
+    db_session.commit()
+
+    headers = voice_access_headers(client, "hist-code-3")
+
+    list_response = client.get("/api/voice/history", headers=headers)
+    assert list_response.status_code == 200
+    conversations = list_response.json()["conversations"]
+    assert len(conversations) == 1
+    summary = conversations[0]
+    assert summary["call_sid"] == "test-call-sid-history-001"
+    assert summary["provider"] == "xai"
+    assert summary["voice"] == "eve"
+    assert summary["duration_seconds"] == 90.0
+    assert summary["entry_count"] == 3
+    assert "transcript" not in summary  # list view omits transcript
+
+    detail_response = client.get(f"/api/voice/history/{summary['id']}", headers=headers)
+    assert detail_response.status_code == 200
+    detail = detail_response.json()
+    assert detail["call_sid"] == "test-call-sid-history-001"
+    assert len(detail["transcript"]) == 3
+    assert detail["transcript"][0]["role"] == "advisor"
+    assert detail["transcript"][2]["role"] == "tool_call"
