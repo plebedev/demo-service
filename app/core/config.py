@@ -130,6 +130,17 @@ class Settings(BaseSettings):
     anthropic_api_key: str | None = Field(default=None, alias="ANTHROPIC_API_KEY")
     fireworks_api_key: str | None = Field(default=None, alias="FIREWORKS_API_KEY")
     openrouter_api_key: str | None = Field(default=None, alias="OPENROUTER_API_KEY")
+    xai_api_key: str | None = Field(default=None, alias="XAI_API_KEY")
+    voice_xai_model: str = Field(
+        default="grok-voice-think-fast-1.0", alias="VOICE_XAI_MODEL"
+    )
+    voice_provider: str = Field(default="xai", alias="VOICE_PROVIDER")
+    voice_greeting_provider: str = Field(
+        default="openai", alias="VOICE_GREETING_PROVIDER"
+    )
+    voice_greeting_model: str = Field(
+        default="gpt-4o-mini", alias="VOICE_GREETING_MODEL"
+    )
 
     @classmethod
     def settings_customise_sources(

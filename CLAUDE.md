@@ -52,6 +52,12 @@ Defaults:
 - Oracle service should be the `..._tp` service for the API workload
 - production database compatibility means Oracle compatibility
 
+## Oracle SQLAlchemy query rules
+
+- **Never use `.is_(True)` or `.is_(False)`** on boolean columns. Oracle only accepts `IS NULL` / `IS NOT NULL` after `IS`; `.is_(True)` generates `IS 1` which raises `ORA-00908`.
+- Use `== True` / `== False` instead — SQLAlchemy renders these as `= 1` / `= 0` for Oracle's NUMBER-backed booleans.
+- This applies to every `filter()` call on any boolean-mapped column across the entire codebase.
+
 ## Migration rules
 
 - Alembic is the migration system
@@ -108,3 +114,18 @@ Defaults:
 - If you change SQL used in readiness/status or migrations, consider Oracle syntax differences first
 - If you change API responses used by the frontend, update `demo-web-app` in the same session when possible
 - Do not mark migration work complete until the Oracle production path has been considered explicitly
+
+## Adding new config values
+
+Every new field added to `app/core/config.py` must be reflected in the Helm chart before the work is considered complete. Omitting this causes `CrashLoopBackOff` on startup because the env var is missing in the pod.
+
+**Non-secret values** (model names, feature flags, URLs, provider names, numeric limits):
+- Add to `configEnv` in `deploy/helm/backend-api/values.yaml` with a safe default value
+- Example: `VOICE_XAI_MODEL: "grok-voice-think-fast-1.0"`
+
+**Secret values** (API keys, passwords, tokens):
+- Do NOT add to `values.yaml` — secrets are injected at deploy time via `task apply-runtime-secret`
+- Document the new secret name in `.env.example` and `local/.env.backend.example` only
+- The pod reads secrets from the Kubernetes Secret named by `existingSecretName`
+
+**How to tell them apart**: if the value would be unsafe to commit to git, it is a secret. Everything else is a non-secret config value and belongs in `configEnv`.

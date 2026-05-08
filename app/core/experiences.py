@@ -10,16 +10,19 @@ class ExperienceId(StrEnum):
 
     MESSY_NOTES = "messy-notes"
     RAG_DEMO = "rag-demo"
+    VOICE_DEMO = "voice-demo"
 
 
 EXPERIENCE_ROUTES: dict[ExperienceId, str] = {
     ExperienceId.MESSY_NOTES: "/messy-notes",
     ExperienceId.RAG_DEMO: "/rag-demo",
+    ExperienceId.VOICE_DEMO: "/voice-demo",
 }
 
 EXPERIENCE_LABELS: dict[ExperienceId, str] = {
     ExperienceId.MESSY_NOTES: "Messy Notes",
     ExperienceId.RAG_DEMO: "RAG Demo",
+    ExperienceId.VOICE_DEMO: "Voice Demo",
 }
 
 EXPERIENCE_DESCRIPTIONS: dict[ExperienceId, str] = {
@@ -27,8 +30,10 @@ EXPERIENCE_DESCRIPTIONS: dict[ExperienceId, str] = {
         "Turn pasted text, text files, or extractable PDFs into a structured brief."
     ),
     ExperienceId.RAG_DEMO: (
-        "A retrieval-grounded demo experience. The protected page is available now; "
-        "the full workflow is coming soon."
+        "A retrieval-grounded demo workspace with persona configuration and scoped document setup."
+    ),
+    ExperienceId.VOICE_DEMO: (
+        "A real-time voice AI advisor that helps employers assess workforce development readiness."
     ),
 }
 

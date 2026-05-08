@@ -9,6 +9,7 @@ from app.api.routes import (
     rag,
     runs,
     system,
+    voice,
     webhooks,
 )
 
@@ -18,5 +19,7 @@ api_router.include_router(experiences.router)
 api_router.include_router(access.router)
 api_router.include_router(runs.router)
 api_router.include_router(rag.router)
+api_router.include_router(voice.router)
+api_router.include_router(voice.admin_router)
 api_router.include_router(invitations_admin.router)
 api_router.include_router(webhooks.router)

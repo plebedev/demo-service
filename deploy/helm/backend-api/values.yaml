@@ -19,6 +19,18 @@ ingress:
   path: /api
   pathType: Prefix
 
+# Exposes only the two Twilio-facing voice endpoints publicly.
+# The rest of the backend API remains internal (cluster DNS only).
+voiceIngress:
+  enabled: true
+  className: traefik
+  annotations: {}
+  paths:
+    - path: /api/voice/inbound
+      pathType: Exact
+    - path: /api/voice/stream
+      pathType: Prefix
+
 resources:
   requests:
     cpu: 100m
@@ -59,6 +71,7 @@ configEnv:
   INVITE_EMAIL_DRAFT_MODEL: "gpt-5-mini"
   OCI_EMAIL_SMTP_PORT: "587"
   SMS_NOTIFICATION_ENABLED: "false"
+  VOICE_PROVIDER: "xai"
 
 secretEnv: {}
 existingSecretName: ""

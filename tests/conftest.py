@@ -132,6 +132,8 @@ def reset_database(
                     invitation_requests,
                     invitation_redemptions,
                     invitation_codes,
+                    voice_personas,
+                    voice_experience_configs,
                     example_records
                 RESTART IDENTITY CASCADE
                 """
