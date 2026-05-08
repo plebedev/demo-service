@@ -37,13 +37,14 @@ def voice_access_headers(
 def create_voice_config(
     client: TestClient,
     headers: dict[str, str],
-    voice_name: str = "Eve",
+    voice_name: str = "eve",
+    voice_provider: str | None = None,
 ) -> dict:  # type: ignore[type-arg]
     """Create or update the voice experience config and return the response body."""
     response = client.put(
         "/api/voice/config",
         headers=headers,
-        json={"voice_name": voice_name},
+        json={"voice_name": voice_name, "voice_provider": voice_provider},
     )
     assert response.status_code == 200
     return response.json()  # type: ignore[no-any-return]
@@ -132,9 +133,10 @@ def test_voice_config_returns_404_when_not_initialized(client: TestClient) -> No
 def test_voice_config_put_creates_config(client: TestClient) -> None:
     """PUT /api/voice/config creates a config and returns the created record."""
     headers = voice_access_headers(client, "config-create-code")
-    payload = create_voice_config(client, headers, voice_name="Eve")
+    payload = create_voice_config(client, headers, voice_name="eve", voice_provider="xai")
 
-    assert payload["voice_name"] == "Eve"
+    assert payload["voice_name"] == "eve"
+    assert payload["voice_provider"] == "xai"
     assert payload["experience_id"] == "voice-demo"
     assert payload["id"] is not None
     assert payload["created_at"] is not None
@@ -142,27 +144,28 @@ def test_voice_config_put_creates_config(client: TestClient) -> None:
 
 
 def test_voice_config_put_updates_existing_config(client: TestClient) -> None:
-    """PUT /api/voice/config updates voice_name when config already exists."""
+    """PUT /api/voice/config updates voice fields when config already exists."""
     headers = voice_access_headers(client, "config-update-code")
-    create_voice_config(client, headers, voice_name="Eve")
+    create_voice_config(client, headers, voice_name="eve", voice_provider="xai")
 
     response = client.put(
         "/api/voice/config",
         headers=headers,
-        json={"voice_name": "Alex"},
+        json={"voice_name": "alloy", "voice_provider": "openai"},
     )
     assert response.status_code == 200
-    assert response.json()["voice_name"] == "Alex"
+    assert response.json()["voice_name"] == "alloy"
+    assert response.json()["voice_provider"] == "openai"
 
 
 def test_voice_config_get_returns_saved_config(client: TestClient) -> None:
     """GET /api/voice/config returns the saved config."""
     headers = voice_access_headers(client, "config-get-code")
-    create_voice_config(client, headers, voice_name="Eve")
+    create_voice_config(client, headers, voice_name="eve")
 
     response = client.get("/api/voice/config", headers=headers)
     assert response.status_code == 200
-    assert response.json()["voice_name"] == "Eve"
+    assert response.json()["voice_name"] == "eve"
 
 
 def test_voice_config_stored_with_correct_experience_id(
@@ -170,7 +173,7 @@ def test_voice_config_stored_with_correct_experience_id(
 ) -> None:
     """Config is stored in the DB with experience_id='voice-demo'."""
     headers = voice_access_headers(client, "config-db-code")
-    create_voice_config(client, headers, voice_name="Eve")
+    create_voice_config(client, headers, voice_name="eve")
 
     record = (
         db_session.query(VoiceExperienceConfig)
@@ -178,7 +181,27 @@ def test_voice_config_stored_with_correct_experience_id(
         .first()
     )
     assert record is not None
-    assert record.voice_name == "Eve"
+    assert record.voice_name == "eve"
+
+
+def test_list_voice_providers_returns_all_providers(client: TestClient) -> None:
+    """GET /api/voice/providers returns xAI and OpenAI with their voice lists."""
+    headers = voice_access_headers(client, "providers-list-code")
+    response = client.get("/api/voice/providers", headers=headers)
+    assert response.status_code == 200
+
+    data = response.json()
+    assert "providers" in data
+    provider_ids = {p["provider_id"] for p in data["providers"]}
+    assert provider_ids == {"xai", "openai"}
+
+    xai = next(p for p in data["providers"] if p["provider_id"] == "xai")
+    assert xai["provider_name"] == "xAI"
+    assert set(xai["voices"]) == {"eve", "ara", "rex", "sal", "leo"}
+
+    openai = next(p for p in data["providers"] if p["provider_id"] == "openai")
+    assert openai["provider_name"] == "OpenAI"
+    assert set(openai["voices"]) == {"alloy", "echo", "fable", "onyx", "nova", "shimmer"}
 
 
 # ---------------------------------------------------------------------------
@@ -407,10 +430,11 @@ def test_admin_can_upsert_config(client: TestClient) -> None:
     response = client.put(
         "/api/internal/admin/voice/experiences/voice-demo/config",
         headers={"X-Admin-Secret": "test-admin-secret"},
-        json={"voice_name": "Admin Eve"},
+        json={"voice_name": "eve", "voice_provider": "xai"},
     )
     assert response.status_code == 200
-    assert response.json()["voice_name"] == "Admin Eve"
+    assert response.json()["voice_name"] == "eve"
+    assert response.json()["voice_provider"] == "xai"
 
 
 def test_admin_can_patch_persona(client: TestClient) -> None:

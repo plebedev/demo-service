@@ -14,7 +14,7 @@ class VoicePersonaCreateRequest(BaseModel):
     instructions: str = Field(
         min_length=1,
         max_length=16000,
-        description="System-level instructions passed to the xAI voice agent session",
+        description="System-level instructions passed to the voice agent session",
     )
     capabilities: str | None = Field(
         default=None,
@@ -80,7 +80,12 @@ class VoiceExperienceConfigResponse(BaseModel):
 
     id: int = Field(description="Database ID")
     experience_id: str = Field(description="Experience identifier")
-    voice_name: str = Field(description="Consistent voice character name")
+    voice_name: str = Field(
+        description="Provider API voice identifier, e.g. 'eve' (xAI) or 'alloy' (OpenAI)"
+    )
+    voice_provider: str | None = Field(
+        description="Per-experience provider override; null falls back to global VOICE_PROVIDER"
+    )
     synthesized_greeting: str | None = Field(
         description="LLM-generated greeting used on call open"
     )
@@ -97,5 +102,26 @@ class VoiceExperienceConfigUpsertRequest(BaseModel):
     voice_name: str = Field(
         min_length=1,
         max_length=128,
-        description="Consistent voice character name shown to callers",
+        description="Provider API voice identifier, e.g. 'eve' (xAI) or 'alloy' (OpenAI)",
     )
+    voice_provider: str | None = Field(
+        default=None,
+        max_length=32,
+        description="Provider override for this experience: 'xai' or 'openai'",
+    )
+
+
+class VoiceProviderInfo(BaseModel):
+    """A single voice provider with its available voices."""
+
+    provider_id: str = Field(description="Provider identifier stored in DB, e.g. 'xai'")
+    provider_name: str = Field(description="User-visible provider name, e.g. 'xAI'")
+    voices: list[str] = Field(
+        description="Available voice identifiers for this provider"
+    )
+
+
+class VoiceProvidersResponse(BaseModel):
+    """List of available voice providers and their voices."""
+
+    providers: list[VoiceProviderInfo]

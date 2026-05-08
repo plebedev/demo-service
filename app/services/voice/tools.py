@@ -292,8 +292,8 @@ class VoiceToolRegistry:
         except KeyError as exc:
             raise KeyError(f"Unknown voice tool '{name}'.") from exc
 
-    def xai_definitions(self) -> list[dict[str, Any]]:
-        """Return xAI function definitions for all registered tools."""
+    def tool_definitions(self) -> list[dict[str, Any]]:
+        """Return function tool definitions for all registered tools."""
         return [entry.to_xai_definition() for entry in self._entries.values()]
 
     def build_prompt_section(self) -> str:

@@ -134,6 +134,7 @@ class Settings(BaseSettings):
     voice_xai_model: str = Field(
         default="grok-voice-think-fast-1.0", alias="VOICE_XAI_MODEL"
     )
+    voice_provider: str = Field(default="xai", alias="VOICE_PROVIDER")
     voice_greeting_provider: str = Field(
         default="openai", alias="VOICE_GREETING_PROVIDER"
     )

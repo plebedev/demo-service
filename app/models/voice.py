@@ -30,7 +30,10 @@ class VoiceExperienceConfig(Base):
     )
     voice_name: Mapped[str] = mapped_column(
         String(128), nullable=False
-    )  # consistent voice character name shown to callers
+    )  # provider API voice identifier, e.g. "eve" (xAI) or "alloy" (OpenAI)
+    voice_provider: Mapped[str] = mapped_column(
+        String(32), nullable=True
+    )  # per-experience provider override; if null, falls back to global VOICE_PROVIDER setting
     synthesized_greeting: Mapped[str] = mapped_column(
         Text(), nullable=True
     )  # LLM-generated greeting; regenerated when active personas change

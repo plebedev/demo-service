@@ -38,16 +38,26 @@ from app.schemas.voice import (
     VoicePersonaListResponse,
     VoicePersonaResponse,
     VoicePersonaUpdateRequest,
+    VoiceProviderInfo,
+    VoiceProvidersResponse,
 )
+from app.services.voice.base_client import VoiceClient
+from app.services.voice.factory import get_voice_client
 from app.services.voice.greeting import refresh_greeting_if_needed
 from app.services.voice.session import create_session, get_session, remove_session
 from app.services.voice.tools import VoiceToolRegistry, build_voice_tool_registry
-from app.services.voice.xai_client import XaiVoiceClient
 
 logger = logging.getLogger(__name__)
 
 # Singleton registry built once at import time — stateless, shared across requests.
 _voice_tool_registry: VoiceToolRegistry = build_voice_tool_registry()
+
+# Hardcoded provider/voice catalogue — matches factory._PROVIDER_MODELS keys.
+_PROVIDER_VOICES: dict[str, list[str]] = {
+    "xai": ["eve", "ara", "rex", "sal", "leo"],
+    "openai": ["alloy", "echo", "fable", "onyx", "nova", "shimmer"],
+}
+_PROVIDER_NAMES: dict[str, str] = {"xai": "xAI", "openai": "OpenAI"}
 
 # Public voice routes: Twilio webhook, Media Streams WS, browser WS, user-facing management
 router = APIRouter(prefix="/api/voice", tags=["voice"])
@@ -90,6 +100,7 @@ def _serialize_config(cfg: VoiceExperienceConfig) -> VoiceExperienceConfigRespon
         id=cfg.id,
         experience_id=cfg.experience_id,
         voice_name=cfg.voice_name,
+        voice_provider=cfg.voice_provider,
         synthesized_greeting=cfg.synthesized_greeting,
         greeting_synced_at=cfg.greeting_synced_at,
         created_at=cfg.created_at,
@@ -226,8 +237,21 @@ async def voice_stream(
             await websocket.close(code=4003)
             return
 
-    if not settings.xai_api_key:
-        logger.error("XAI_API_KEY not configured; closing voice stream")
+    # Read per-experience config before opening the voice client so we can
+    # honour a per-experience provider override.
+    voice_cfg_for_stream = (
+        db.query(VoiceExperienceConfig)
+        .filter(VoiceExperienceConfig.experience_id == ExperienceId.VOICE_DEMO)
+        .first()
+    )
+    provider_override = (
+        voice_cfg_for_stream.voice_provider if voice_cfg_for_stream else None
+    )
+
+    try:
+        voice_client = get_voice_client(settings, provider=provider_override)
+    except (RuntimeError, ValueError) as exc:
+        logger.error("Voice provider not configured: %s", exc)
         await websocket.close(code=1011)
         return
 
@@ -236,14 +260,11 @@ async def voice_stream(
     pending_tool_calls: dict[str, dict[str, Any]] = {}
 
     try:
-        async with XaiVoiceClient(
-            api_key=settings.xai_api_key,
-            model=settings.voice_xai_model,
-        ) as xai:
+        async with voice_client as vc:
             input_task = asyncio.create_task(
                 _handle_twilio_messages(
                     websocket,
-                    xai,
+                    vc,
                     db,
                     settings,
                     call_sid_ref=call_sid_ref,
@@ -254,7 +275,7 @@ async def voice_stream(
             output_task = asyncio.create_task(
                 _handle_xai_to_twilio(
                     websocket,
-                    xai,
+                    vc,
                     stream_sid_ref=stream_sid_ref,
                     call_sid_ref=call_sid_ref,
                     pending_tool_calls=pending_tool_calls,
@@ -283,14 +304,14 @@ async def voice_stream(
 
 async def _handle_twilio_messages(
     ws: WebSocket,
-    xai: XaiVoiceClient,
+    vc: VoiceClient,
     db: Session,
     settings: Settings,
     call_sid_ref: list[str | None],
     stream_sid_ref: list[str | None],
     pending_tool_calls: dict[str, dict[str, Any]],
 ) -> None:
-    """Receive Twilio Media Streams events and forward audio to xAI."""
+    """Receive Twilio Media Streams events and forward audio to the voice provider."""
     async for raw in _ws_iter(ws):
         try:
             msg = json.loads(raw)
@@ -311,7 +332,7 @@ async def _handle_twilio_messages(
                 .filter(VoiceExperienceConfig.experience_id == ExperienceId.VOICE_DEMO)
                 .first()
             )
-            voice_name = voice_cfg.voice_name if voice_cfg else "Eve"
+            voice = voice_cfg.voice_name if voice_cfg else "eve"
             tool_config = _load_tool_config(persona)
             create_session(
                 session_id=call_sid,
@@ -323,19 +344,19 @@ async def _handle_twilio_messages(
             )
             tool_prompt = _voice_tool_registry.build_prompt_section()
             instructions = f"{persona.instructions}\n\n{tool_prompt}"
-            await xai.configure_session(
+            await vc.configure_session(
                 instructions=instructions,
-                tools=_voice_tool_registry.xai_definitions(),
-                voice=voice_name,
+                tools=_voice_tool_registry.tool_definitions(),
+                voice=voice,
                 audio_format={"type": "audio/pcmu", "rate": 8000},
             )
-            await xai.start_response()
+            await vc.start_response()
             logger.info("Voice stream started: call=%s", call_sid)
 
         elif event == "media":
             payload = msg.get("media", {}).get("payload", "")
             if payload:
-                await xai.send_audio(payload)
+                await vc.send_audio(payload)
 
         elif event == "stop":
             if call_sid_ref[0]:
@@ -346,19 +367,19 @@ async def _handle_twilio_messages(
 
 async def _handle_xai_to_twilio(
     ws: WebSocket,
-    xai: XaiVoiceClient,
+    vc: VoiceClient,
     stream_sid_ref: list[str | None],
     call_sid_ref: list[str | None],
     pending_tool_calls: dict[str, dict[str, Any]],
 ) -> None:
-    """Receive xAI events and forward audio + transcripts + tool results to caller."""
+    """Receive voice provider events and forward audio + transcripts + tool results to caller."""
     close_after_response = False
     current_response_id: str | None = None
     cancelled_response_id: str | None = None
 
     while True:
         try:
-            event = await xai.receive()
+            event = await vc.receive()
         except Exception:
             break
 
@@ -366,7 +387,7 @@ async def _handle_xai_to_twilio(
 
         if event_type == "input_audio_buffer.speech_started":
             cancelled_response_id = current_response_id
-            await xai.cancel_response()
+            await vc.cancel_response()
             stream_sid = stream_sid_ref[0]
             if stream_sid:
                 await ws.send_text(
@@ -446,7 +467,7 @@ async def _handle_xai_to_twilio(
                     session = get_session(call_sid_ref[0] or "")
                     tool_config = session.persona_tool_config if session else {}
                     result = entry.execute(args, tool_config)
-                    await xai.send_tool_result(call_id, result)
+                    await vc.send_tool_result(call_id, result)
 
         elif event_type == "response.done":
             logger.info(
@@ -479,6 +500,23 @@ async def _ws_iter(ws: WebSocket):  # type: ignore[no-untyped-def]
 # ---------------------------------------------------------------------------
 
 _EXPERIENCE_ID = ExperienceId.VOICE_DEMO
+
+
+@router.get("/providers", response_model=VoiceProvidersResponse)
+def list_voice_providers(
+    claims: AccessTokenClaims = Depends(voice_access),
+) -> VoiceProvidersResponse:
+    """Return available voice providers and their voice options."""
+    return VoiceProvidersResponse(
+        providers=[
+            VoiceProviderInfo(
+                provider_id=pid,
+                provider_name=_PROVIDER_NAMES[pid],
+                voices=voices,
+            )
+            for pid, voices in _PROVIDER_VOICES.items()
+        ]
+    )
 
 
 @router.get("/config", response_model=VoiceExperienceConfigResponse)
@@ -517,10 +555,12 @@ def upsert_voice_config(
         cfg = VoiceExperienceConfig(
             experience_id=_EXPERIENCE_ID,
             voice_name=payload.voice_name,
+            voice_provider=payload.voice_provider,
         )
         db.add(cfg)
     else:
         cfg.voice_name = payload.voice_name
+        cfg.voice_provider = payload.voice_provider  # type: ignore[assignment]
     db.commit()
     db.refresh(cfg)
     background_tasks.add_task(refresh_greeting_if_needed, db, _EXPERIENCE_ID, settings)
@@ -680,10 +720,12 @@ def admin_upsert_experience_config(
         cfg = VoiceExperienceConfig(
             experience_id=experience_id,
             voice_name=payload.voice_name,
+            voice_provider=payload.voice_provider,
         )
         db.add(cfg)
     else:
         cfg.voice_name = payload.voice_name
+        cfg.voice_provider = payload.voice_provider  # type: ignore[assignment]
     db.commit()
     db.refresh(cfg)
     background_tasks.add_task(refresh_greeting_if_needed, db, experience_id, settings)
