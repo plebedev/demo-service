@@ -5,10 +5,10 @@ use axum::routing::{get, post};
 use axum::Router;
 
 use crate::models::{
-    ChunkRequest, ChunkResponse, ErrorResponse, HealthResponse, InspectInputRequest,
-    InspectInputResponse, NormalizeRequest,
+    AnalyzeRequest, ChunkRequest, ChunkResponse, ErrorResponse, HealthResponse,
+    InspectInputRequest, InspectInputResponse, NormalizeRequest,
 };
-use crate::text::{chunk_text, inspect_input, normalize_text};
+use crate::text::{analyze_text, chunk_text, inspect_input, normalize_text};
 use tracing::info;
 
 pub fn router() -> Router {
@@ -16,6 +16,7 @@ pub fn router() -> Router {
         .route("/health", get(health))
         .route("/v1/text/normalize", post(normalize))
         .route("/v1/text/chunk", post(chunk))
+        .route("/v1/text/analyze", post(analyze))
         .route("/v1/input/inspect", post(inspect))
 }
 
@@ -45,6 +46,18 @@ async fn chunk(Json(payload): Json<ChunkRequest>) -> Result<Json<ChunkResponse>,
 
 async fn inspect(Json(payload): Json<InspectInputRequest>) -> Json<InspectInputResponse> {
     Json(inspect_input(&payload))
+}
+
+async fn analyze(Json(payload): Json<AnalyzeRequest>) -> Result<impl IntoResponse, ApiError> {
+    let response = analyze_text(&payload).map_err(|err| ApiError::bad_request(err.to_string()))?;
+    info!(
+        input_bytes = response.input_bytes,
+        normalized_bytes = response.normalized_bytes,
+        chunk_count = response.stats.chunk_count,
+        trimmed = response.trimmed,
+        "text analyzed"
+    );
+    Ok(Json(response))
 }
 
 #[derive(Debug)]

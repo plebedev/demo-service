@@ -24,6 +24,18 @@ class TextToolsChunk:
     bytes: int
 
 
+@dataclass(frozen=True)
+class TextToolsAnalysis:
+    """Text analysis returned by the Rust text-tools service."""
+
+    normalized_text: str
+    input_bytes: int
+    normalized_bytes: int
+    trimmed: bool
+    chunk_count: int
+    warnings: list[str]
+
+
 class TextToolsClient:
     """Tiny HTTP client for deterministic text-tools calls."""
 
@@ -58,6 +70,39 @@ class TextToolsClient:
             )
             for item in payload.get("chunks", [])
         ]
+
+    def analyze_text(
+        self,
+        text: str,
+        *,
+        max_bytes: int,
+        max_chunk_size: int,
+        chunk_overlap: int,
+    ) -> TextToolsAnalysis:
+        """Normalize, bound, chunk, and measure text through the Rust sidecar."""
+        response = httpx.post(
+            f"{self.base_url}/v1/text/analyze",
+            json={
+                "text": text,
+                "limits": {
+                    "max_bytes": max_bytes,
+                    "max_chunk_size": max_chunk_size,
+                    "chunk_overlap": chunk_overlap,
+                },
+            },
+            timeout=self.timeout,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        stats = payload.get("stats", {})
+        return TextToolsAnalysis(
+            normalized_text=str(payload["normalized_text"]),
+            input_bytes=int(payload["input_bytes"]),
+            normalized_bytes=int(payload["normalized_bytes"]),
+            trimmed=bool(payload["trimmed"]),
+            chunk_count=int(stats.get("chunk_count", 0)),
+            warnings=[str(item) for item in payload.get("warnings", [])],
+        )
 
 
 class RagChunkFallback(Protocol):

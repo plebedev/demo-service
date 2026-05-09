@@ -118,7 +118,7 @@ async fn run_case(client: &DemoClient, run_id: u64, case: GuardrailCase) -> Resu
     let bytes =
         fs::read(&case.path).with_context(|| format!("failed to read {}", case.path.display()))?;
     let part = Part::bytes(bytes)
-        .file_name(case.file_name.to_owned())
+        .file_name(case.file_name)   // Cow::Borrowed, no allocation
         .mime_str(case.mime_type)
         .with_context(|| format!("failed to prepare {}", case.file_name))?;
     let response: RunResponse = client
