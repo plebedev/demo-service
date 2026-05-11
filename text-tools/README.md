@@ -8,6 +8,7 @@
 GET  /health
 POST /v1/text/normalize
 POST /v1/text/chunk
+POST /v1/text/analyze
 POST /v1/input/inspect
 ```
 
@@ -69,6 +70,12 @@ curl -s http://127.0.0.1:8081/v1/text/normalize \
 curl -s http://127.0.0.1:8081/v1/text/chunk \
   -H 'Content-Type: application/json' \
   -d '{"text":"long text goes here","chunk_size":100,"chunk_overlap":10}'
+```
+
+```bash
+curl -s http://127.0.0.1:8081/v1/text/analyze \
+  -H 'Content-Type: application/json' \
+  -d '{"text":"hello https://example.test person@example.test","limits":{"max_bytes":1000,"max_chunk_size":100,"chunk_overlap":10}}'
 ```
 
 ```bash

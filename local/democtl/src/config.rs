@@ -16,6 +16,7 @@ pub struct Config {
 }
 
 impl Config {
+
     pub fn from_cli(cli: &Cli) -> Result<Self> {
         let base_url = parse_base_url(&cli.base_url)?;
         Ok(Self {

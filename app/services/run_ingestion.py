@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from io import BytesIO
+import logging
 from pathlib import Path
 from typing import Callable
 
@@ -10,6 +11,7 @@ from fastapi import UploadFile
 from pypdf import PdfReader
 
 from app.core.config import Settings
+from app.core.logging import log_event
 from app.schemas.runs import (
     AcceptedRunFileSummary,
     RejectedRunFile,
@@ -19,6 +21,9 @@ from app.schemas.runs import (
     RunInputMetadata,
     UploadedRunFile,
 )
+from app.services.text_tools import TextToolsClient
+
+logger = logging.getLogger(__name__)
 
 SUPPORTED_TEXT_MIME_TYPES = {"text/plain"}
 SUPPORTED_PDF_MIME_TYPES = {"application/pdf"}
@@ -185,7 +190,7 @@ async def ingest_run_input(
     normalized_input_text, workflow_trimmed = _build_workflow_input_text(
         pasted_text=stored_pasted_text,
         accepted_files=accepted_files,
-        max_total_bytes=settings.max_total_workflow_text_bytes,
+        settings=settings,
     )
     if workflow_trimmed:
         warnings.append(
@@ -250,7 +255,7 @@ def _build_workflow_input_text(
     *,
     pasted_text: str | None,
     accepted_files: list[UploadedRunFile],
-    max_total_bytes: int,
+    settings: Settings,
 ) -> tuple[str | None, bool]:
     sections: list[str] = []
     if pasted_text:
@@ -263,7 +268,25 @@ def _build_workflow_input_text(
         return None, False
 
     combined = "\n\n".join(sections)
-    return _trim_text_to_bytes(combined, max_total_bytes)
+    if settings.text_tools_enabled:
+        analysis = TextToolsClient(settings).analyze_text(
+            combined,
+            max_bytes=settings.max_total_workflow_text_bytes,
+            max_chunk_size=settings.rag_chunk_size,
+            chunk_overlap=settings.rag_chunk_overlap,
+        )
+        log_event(
+            logger,
+            "text_tools_workflow_input_analyzed",
+            text_tools_base_url=settings.text_tools_base_url,
+            input_bytes=analysis.input_bytes,
+            normalized_bytes=analysis.normalized_bytes,
+            chunk_count=analysis.chunk_count,
+            trimmed=analysis.trimmed,
+            warning_count=len(analysis.warnings),
+        )
+        return analysis.normalized_text or None, analysis.trimmed
+    return _trim_text_to_bytes(combined, settings.max_total_workflow_text_bytes)
 
 
 def _resolve_extractor(

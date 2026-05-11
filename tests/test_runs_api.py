@@ -8,6 +8,8 @@ import pytest
 
 from app.core.config import get_settings
 from app.db.models import InvitationCode, Run, RunEvent
+from app.services.run_ingestion import ingest_run_input
+from app.services.text_tools import TextToolsAnalysis
 from app.services.workflow_executor import WorkflowExecutionError, execute_run_workflow
 
 
@@ -611,6 +613,71 @@ def test_ingest_trims_to_workflow_limit(client) -> None:
     assert payload["ingestion_summary_json"]["counts"]["trimmed_pasted_text"] == 1
     assert payload["ingestion_summary_json"]["warnings"]
     assert payload["ingestion_summary_json"]["workflow_text_bytes"] <= 400_000
+
+
+def test_ingest_uses_text_tools_analysis_for_workflow_input(monkeypatch) -> None:
+    settings = get_settings().model_copy(
+        update={
+            "text_tools_enabled": True,
+            "text_tools_base_url": "http://text-tools.test",
+            "max_total_workflow_text_bytes": 25,
+            "rag_chunk_size": 600,
+            "rag_chunk_overlap": 60,
+        }
+    )
+    calls = []
+
+    def fake_analyze_text(
+        self,
+        text: str,
+        *,
+        max_bytes: int,
+        max_chunk_size: int,
+        chunk_overlap: int,
+    ) -> TextToolsAnalysis:
+        calls.append(
+            {
+                "base_url": self.base_url,
+                "text": text,
+                "max_bytes": max_bytes,
+                "max_chunk_size": max_chunk_size,
+                "chunk_overlap": chunk_overlap,
+            }
+        )
+        return TextToolsAnalysis(
+            normalized_text="Pasted notes: normalized by rust",
+            input_bytes=len(text.encode("utf-8")),
+            normalized_bytes=32,
+            trimmed=True,
+            chunk_count=1,
+            warnings=["trimmed"],
+        )
+
+    monkeypatch.setattr(
+        "app.services.text_tools.TextToolsClient.analyze_text",
+        fake_analyze_text,
+    )
+
+    result = asyncio.run(
+        ingest_run_input(
+            settings=settings,
+            pasted_text="  alpha\nbeta  ",
+            files=[],
+        )
+    )
+
+    assert result.normalized_input_text == "Pasted notes: normalized by rust"
+    assert result.ingestion_summary_json.workflow_text_bytes == 32
+    assert any("representative slice" in item for item in result.ingestion_summary_json.warnings)
+    assert calls == [
+        {
+            "base_url": "http://text-tools.test",
+            "text": "Pasted notes:\nalpha\nbeta",
+            "max_bytes": 25,
+            "max_chunk_size": 600,
+            "chunk_overlap": 60,
+        }
+    ]
 
 
 def test_ingest_trims_file_text_deterministically(client) -> None:

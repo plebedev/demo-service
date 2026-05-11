@@ -146,7 +146,7 @@ pub fn path_url(base_url: &Url, path: &str) -> Result<Url> {
 
 pub async fn parse_response<T: DeserializeOwned>(response: Response) -> Result<T> {
     let status = response.status();
-    let text = response.text().await.unwrap_or_default();
+    let text = response.text().await.context("failed to read response body")?;
     if !status.is_success() {
         anyhow::bail!("{}", format_backend_error(status.as_u16(), &text));
     }
