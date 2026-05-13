@@ -9,7 +9,7 @@ import logging
 from typing import Any, cast
 
 from fastapi import HTTPException, status
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from pydantic_ai.usage import UsageLimits
 from sqlalchemy.orm import Session
 
@@ -24,6 +24,8 @@ from app.workflows.config_models import AgentWorkflowConfig
 from app.workflows.loader import WorkflowRegistry, WorkflowRuntime
 from app.workflows.tools import (
     BriefInput,
+    BriefOutput,
+    BriefSection,
     ContradictionFindingsOutput,
     DuplicateFindingsOutput,
     ExtractedItemsOutput,
@@ -40,6 +42,19 @@ logger = logging.getLogger(__name__)
 
 class WorkflowExecutionError(RuntimeError):
     """Raised when a bounded workflow cannot proceed."""
+
+
+class LocalSlmProjectBrief(BaseModel):
+    """Strict JSON shape emitted by the locally fine-tuned messy-brief SLM."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    title: str
+    summary: str
+    key_points: list[str]
+    open_questions: list[str]
+    risks: list[str]
+    next_actions: list[str]
 
 
 async def execute_run_workflow(
@@ -142,6 +157,10 @@ async def _execute_messy_notes(
     registry: WorkflowRegistry,
     settings: Settings,
 ) -> None:
+    if workflow.config.key == "messy-notes-local-slm":
+        await _execute_messy_notes_local_slm(db, run, workflow, settings)
+        return
+
     if workflow.config.key != "messy-notes-v1":
         raise WorkflowExecutionError(f"Unsupported workflow '{workflow.config.key}'.")
 
@@ -235,6 +254,42 @@ async def _execute_messy_notes(
     await _agent_finished(db, run, workflow, "brief_writer", settings)
 
 
+async def _execute_messy_notes_local_slm(
+    db: Session,
+    run: Run,
+    workflow: WorkflowRuntime,
+    settings: Settings,
+) -> None:
+    """Execute the local Ollama-backed single-model messy notes workflow."""
+    role = workflow.config.starting_agent
+    await _agent_started(db, run, workflow, role, settings, touch_agent=False)
+    runtime = workflow.agents[role]
+    if runtime.agent is None:
+        raise WorkflowExecutionError(f"Workflow agent '{role}' is not executable.")
+
+    source_text = run.normalized_input_text or run.input_text or ""
+    if not source_text.strip():
+        raise WorkflowExecutionError("Cannot execute local SLM workflow without input.")
+
+    prompt = (
+        "Messy notes:\n"
+        f"{source_text.strip()}\n\n"
+        "Return only the strict JSON project brief."
+    )
+    result = await runtime.agent.run(
+        prompt,
+        deps=WorkflowAgentDeps(run=run, db=db),
+        usage_limits=UsageLimits(request_limit=1, tool_calls_limit=0),
+    )
+    project_brief = _parse_local_slm_project_brief(str(result.output))
+    brief = _local_project_brief_to_run_brief(project_brief)
+    run.output_brief_serialized = brief.model_dump_json()
+    db.add(run)
+    db.commit()
+    db.refresh(run)
+    await _agent_finished(db, run, workflow, role, settings)
+
+
 def _run_extraction_parallel(
     db: Session,
     run: Run,
@@ -312,6 +367,8 @@ async def _agent_started(
     workflow: WorkflowRuntime,
     role: str,
     settings: Settings,
+    *,
+    touch_agent: bool = True,
 ) -> None:
     _agent_config(workflow, role)
     _event(
@@ -322,7 +379,8 @@ async def _agent_started(
         status=RunStatus.PROCESSING.value,
         message=f"Agent {role} started.",
     )
-    await _touch_pydantic_agent(workflow, run, role, settings)
+    if touch_agent:
+        await _touch_pydantic_agent(workflow, run, role, settings)
 
 
 async def _agent_finished(
@@ -533,6 +591,54 @@ def _agent_config(workflow: WorkflowRuntime, role: str) -> AgentWorkflowConfig:
         return workflow.agents[role].config
     except KeyError as exc:
         raise WorkflowExecutionError(f"Unknown workflow agent '{role}'.") from exc
+
+
+def _parse_local_slm_project_brief(raw_output: str) -> LocalSlmProjectBrief:
+    """Validate the local SLM's trained JSON brief shape."""
+    text = raw_output.strip()
+    if text.startswith("```"):
+        raise WorkflowExecutionError("Local SLM returned markdown-fenced output.")
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise WorkflowExecutionError(
+            f"Local SLM returned invalid JSON: {exc.msg}."
+        ) from exc
+    try:
+        return LocalSlmProjectBrief.model_validate(payload)
+    except Exception as exc:
+        raise WorkflowExecutionError(
+            "Local SLM output did not match the expected brief schema."
+        ) from exc
+
+
+def _local_project_brief_to_run_brief(project: LocalSlmProjectBrief) -> BriefOutput:
+    """Map the trained local SLM schema into the run brief shape used by the UI."""
+    sections = [
+        BriefSection(
+            heading="Key points",
+            content=_bullet_list(project.key_points) or "No key points provided.",
+        ),
+        BriefSection(
+            heading="Risks",
+            content=_bullet_list(project.risks) or "No risks identified.",
+        ),
+        BriefSection(
+            heading="Next actions",
+            content=_bullet_list(project.next_actions) or "No next actions provided.",
+        ),
+    ]
+    return BriefOutput(
+        title=project.title,
+        executive_summary=project.summary,
+        sections=sections,
+        open_questions=project.open_questions,
+        audit_notes=["Generated by local messy-brief SLM via Ollama."],
+    )
+
+
+def _bullet_list(items: list[str]) -> str:
+    return "\n".join(f"- {item}" for item in items if item.strip())
 
 
 def _event(

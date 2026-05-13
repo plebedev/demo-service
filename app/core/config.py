@@ -138,6 +138,10 @@ class Settings(BaseSettings):
     oci_email_from_name: str | None = Field(default=None, alias="OCI_EMAIL_FROM_NAME")
     openai_api_key: str | None = Field(default=None, alias="OPENAI_API_KEY")
     anthropic_api_key: str | None = Field(default=None, alias="ANTHROPIC_API_KEY")
+    ollama_base_url: str = Field(
+        default="http://127.0.0.1:11434/v1", alias="OLLAMA_BASE_URL"
+    )
+    ollama_api_key: str = Field(default="ollama", alias="OLLAMA_API_KEY")
     fireworks_api_key: str | None = Field(default=None, alias="FIREWORKS_API_KEY")
     openrouter_api_key: str | None = Field(default=None, alias="OPENROUTER_API_KEY")
     xai_api_key: str | None = Field(default=None, alias="XAI_API_KEY")

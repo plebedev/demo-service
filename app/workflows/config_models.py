@@ -12,6 +12,7 @@ class WorkflowProvider(StrEnum):
 
     OPENAI = "openai"
     ANTHROPIC = "anthropic"
+    OLLAMA = "ollama"
     FIREWORKS = "fireworks"
     OPENROUTER = "openrouter"
 

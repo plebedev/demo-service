@@ -33,6 +33,9 @@ PROVIDER_DEFINITIONS: dict[WorkflowProvider, ProviderDefinition] = {
     WorkflowProvider.ANTHROPIC: ProviderDefinition(
         env_var_name="ANTHROPIC_API_KEY", implemented=True
     ),
+    WorkflowProvider.OLLAMA: ProviderDefinition(
+        env_var_name="OLLAMA_API_KEY", implemented=True
+    ),
     WorkflowProvider.FIREWORKS: ProviderDefinition(
         env_var_name="FIREWORKS_API_KEY", implemented=False
     ),
@@ -78,6 +81,18 @@ def create_model(
         return AnthropicModel(
             model_name,
             provider=AnthropicProvider(api_key=settings.anthropic_api_key),
+        )
+
+    if provider == WorkflowProvider.OLLAMA:
+        from pydantic_ai.models.openai import OpenAIChatModel
+        from pydantic_ai.providers.openai import OpenAIProvider
+
+        return OpenAIChatModel(
+            model_name,
+            provider=OpenAIProvider(
+                base_url=settings.ollama_base_url,
+                api_key=settings.ollama_api_key,
+            ),
         )
 
     env_var_name = required_api_key_env_var(provider)

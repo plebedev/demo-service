@@ -174,6 +174,8 @@ Important variables:
 | `SMS_NOTIFICATION_ENABLED` | Feature flag returned as `features.SmsNotification`; defaults to `false` until SMS campaign approval |
 | `SMS_REPLY_PROVIDER` | PydanticAI provider for SMS reply/opt-out classification, default `openai` |
 | `SMS_REPLY_MODEL` | Small model used for bounded SMS replies, default `gpt-5-mini` |
+| `OLLAMA_BASE_URL` | OpenAI-compatible Ollama chat base URL, default `http://127.0.0.1:11434/v1` |
+| `OLLAMA_API_KEY` | Placeholder API key for Ollama's OpenAI-compatible API, default `ollama` |
 | `OPENAI_API_KEY` | API key for workflow agents using OpenAI models |
 | `ANTHROPIC_API_KEY` | API key for workflow agents or post-processors using Anthropic models |
 | `FIREWORKS_API_KEY` | Reserved future provider key for FireworksAI |
@@ -331,14 +333,14 @@ The backend does not imply that it ranked or fully evaluated dropped notes. If s
 
 ## M5 runtime execution
 
-Submitting a run now executes the configured `messy-notes-v1` workflow
+Submitting a run now executes the configured messy-notes workflow
 synchronously:
 
 - `/api/runs/<run_id>/submit` saves the submitted state and runs the workflow
 - `/api/runs/<run_id>/execute` can execute an existing draft/submitted/failed run
 - `/api/runs/<run_id>/events` returns structured execution events
 
-The first runtime path is intentionally bounded: orchestrator, extractor,
+The hosted runtime path is intentionally bounded: orchestrator, extractor,
 reconciler, and brief writer hand off only through the configured graph.
 Extractor tools run in the one explicit parallel group defined in YAML.
 
@@ -369,14 +371,24 @@ Startup loads and validates:
 - parallel-peer metadata
 - workflow post-processor references
 
-The initial shipped workflow is `messy-notes-v1`, which configures:
+The hosted workflow is `messy-notes-v1`, which configures:
 
 - `orchestrator`
 - `extractor`
 - `reconciler`
 - `brief_writer`
 
-The M5 runtime builds on this config instead of introducing a separate planner.
+The local SLM workflow is `messy-notes-local-slm`, which uses `provider:
+ollama` and model `messy-brief-local`. Switch newly created runs to the local
+workflow with:
+
+```bash
+DEFAULT_WORKFLOW_KEY=messy-notes-local-slm
+OLLAMA_BASE_URL=http://127.0.0.1:11434/v1
+OLLAMA_API_KEY=ollama
+```
+
+The M5 runtime builds on workflow config instead of introducing a separate planner.
 
 ## Local development
 
@@ -401,9 +413,25 @@ task local-up
 ```
 
 Local development starts Postgres with pgvector plus an Ollama container for
-embedding generation. The one-shot `ollama-pull-all-minilm` Compose service
+local model dependencies. The one-shot `ollama-pull-all-minilm` Compose service
 pulls `all-minilm:l12-v2` into the persistent `ollama-data` Docker volume the
 first time local infrastructure starts.
+
+Compose also prepares the local messy-notes SLM model for Ollama:
+
+- `ollama-download-messy-brief` downloads the public GGUF artifact from the
+  `plebedev/messy-brief-slm` GitHub Release into a Docker volume.
+- `ollama-create-messy-brief` creates the Ollama model `messy-brief-local`
+  with the Qwen chat template needed for the fine-tuned model.
+
+No GitHub login is required when downloading from the public release artifact.
+Override the artifact URL or model name from the shell if needed:
+
+```bash
+MESSY_BRIEF_GGUF_URL=https://github.com/plebedev/messy-brief-slm/releases/download/messy-brief-v0.1.0/messy-brief-qwen2.5-1.5b-q4_k_m.gguf \
+MESSY_BRIEF_MODEL_NAME=messy-brief-local \
+task local-up
+```
 
 Verify pgvector:
 
@@ -421,6 +449,28 @@ Verify the local embedding model:
 ```bash
 curl http://127.0.0.1:11434/api/embed \
   -d '{"model":"all-minilm:l12-v2","input":"hello world"}'
+```
+
+Verify the local messy-notes model:
+
+```bash
+curl http://127.0.0.1:11434/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "messy-brief-local",
+    "messages": [
+      {
+        "role": "system",
+        "content": "You convert messy notes into concise structured project briefs. Return only valid JSON with these keys: title, summary, key_points, open_questions, risks, next_actions."
+      },
+      {
+        "role": "user",
+        "content": "kitchen remodel notes. white oak cabinets maybe. lead time 8-10 weeks. decide island size, outlets, sink. budget 45k creeping. tile samples arrive Friday. renew library books irrelevant."
+      }
+    ],
+    "temperature": 0,
+    "stream": false
+  }'
 ```
 
 4. Apply migrations:
