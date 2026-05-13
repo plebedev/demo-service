@@ -34,6 +34,7 @@ from app.workflows.config_models import (
     WorkflowProvider,
 )
 from app.workflows.loader import (
+    WorkflowAgentRuntime,
     assemble_system_prompt,
     load_workflow_registry,
 )
@@ -57,6 +58,8 @@ def build_settings(
             "ACCESS_TOKEN_SIGNING_KEY": "test-signing-key",
             "OPENAI_API_KEY": "test-openai-key",
             "ANTHROPIC_API_KEY": "test-anthropic-key",
+            "OLLAMA_BASE_URL": "http://127.0.0.1:11434/v1",
+            "OLLAMA_API_KEY": "ollama",
             "WORKFLOW_CONFIG_DIR": str(
                 workflow_dir
                 or Path(
@@ -81,6 +84,12 @@ def test_valid_workflow_yaml_loads_successfully(tmp_path: Path) -> None:
     workflow = registry.get_workflow("messy-notes-v1")
     assert workflow.config.starting_agent == "orchestrator"
     assert workflow.agents["extractor"].config.parallel is not None
+    local_workflow = registry.get_workflow("messy-notes-local-slm")
+    assert local_workflow.config.starting_agent == "local_brief_writer"
+    assert (
+        local_workflow.agents["local_brief_writer"].config.provider
+        == WorkflowProvider.OLLAMA
+    )
     assert "audit-tool-usage-and-handoffs" in registry.post_processors
 
 
@@ -292,6 +301,22 @@ def test_openai_model_settings_use_generic_provider_settings() -> None:
     }
 
 
+def test_ollama_model_settings_use_generic_provider_settings() -> None:
+    settings = create_provider_model_settings(
+        provider=WorkflowProvider.OLLAMA,
+        timeout=60,
+        temperature=0.0,
+        max_tokens=900,
+    )
+
+    assert settings == {
+        "temperature": 0.0,
+        "max_tokens": 900,
+        "timeout": 60,
+    }
+    assert required_api_key_env_var(WorkflowProvider.OLLAMA) == "OLLAMA_API_KEY"
+
+
 def test_post_processor_config_loads_correctly() -> None:
     catalog = PostProcessorCatalog.model_validate(
         {
@@ -367,6 +392,57 @@ def test_workflow_execution_completes_and_persists_audit(db_session, tmp_path) -
     assert executed.post_processor_results_serialized is not None
     events = db_session.query(Run).filter(Run.id == executed.id).one()
     assert events.follow_up_count == 0
+
+
+def test_local_slm_workflow_persists_mapped_brief(db_session, tmp_path) -> None:
+    class FakeAgent:
+        async def run(self, *args, **kwargs):
+            del args, kwargs
+            return type(
+                "Result",
+                (),
+                {
+                    "output": (
+                        '{"title":"Kitchen Remodel Planning",'
+                        '"summary":"Plan the kitchen remodel.",'
+                        '"key_points":["Cabinets may be white oak."],'
+                        '"open_questions":["Is a permit required?"],'
+                        '"risks":["Budget may creep."],'
+                        '"next_actions":["Review tile samples."]}'
+                    )
+                },
+            )()
+
+    settings = build_settings(tmp_path)
+    registry = load_workflow_registry(settings)
+    workflow = registry.get_workflow("messy-notes-local-slm")
+    runtime = workflow.agents["local_brief_writer"]
+    workflow.agents["local_brief_writer"] = WorkflowAgentRuntime(
+        config=runtime.config,
+        system_prompt=runtime.system_prompt,
+        agent=FakeAgent(),
+    )
+    run = create_run(
+        db_session,
+        RunCreateRequest(
+            title="Kitchen",
+            input_text="white oak cabinets maybe. tile samples Friday.",
+        ),
+    )
+    run.workflow_key = "messy-notes-local-slm"
+    db_session.add(run)
+    db_session.commit()
+
+    executed = asyncio.run(execute_run_workflow(db_session, run, registry, settings))
+
+    assert executed.status == "completed"
+    payload = executed.output_brief_serialized
+    assert payload is not None
+    assert "Kitchen Remodel Planning" in payload
+    assert "executive_summary" in payload
+    assert "Key points" in payload
+    assert executed.post_processor_results_serialized is not None
+    assert "audit-tool-usage-and-handoffs" in executed.post_processor_results_serialized
 
 
 def test_configured_parallel_extraction_events_are_persisted(

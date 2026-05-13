@@ -1,0 +1,26 @@
+key: messy-notes-local-slm
+description: >
+  Local single-model workflow for turning messy notes into a structured brief
+  using the fine-tuned messy-brief SLM served by Ollama.
+starting_agent: local_brief_writer
+post_processors:
+  - audit-tool-usage-and-handoffs
+flags:
+  allow_single_follow_up: true
+  require_structured_brief_output: true
+  audit_run_events: true
+agents:
+  - role: local_brief_writer
+    provider: ollama
+    model: messy-brief-local
+    system_prompt: >
+      You convert messy notes into concise structured project briefs. Return
+      only valid JSON with these keys: title, summary, key_points,
+      open_questions, risks, next_actions. Preserve known facts, do not invent
+      details, keep future-scope items out of immediate next actions, and omit
+      irrelevant personal reminders.
+    temperature: 0.0
+    max_tokens: 900
+    timeout: 60
+    tools: []
+    can_handoff_to: []

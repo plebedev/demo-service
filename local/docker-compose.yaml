@@ -39,6 +39,75 @@ services:
         curl -fsS http://ollama:11434/api/pull \
           -d '{"model":"all-minilm:l12-v2"}'
 
+  ollama-download-messy-brief:
+    image: curlimages/curl:latest
+    user: "0:0"
+    restart: "no"
+    volumes:
+      - ollama-model-artifacts:/model-artifacts
+    command:
+      - /bin/sh
+      - -c
+      - |
+        set -eu
+        url="${MESSY_BRIEF_GGUF_URL:-https://github.com/plebedev/messy-brief-slm/releases/download/messy-brief-v0.1.0/messy-brief-qwen2.5-1.5b-q4_k_m.gguf}"
+        output="/model-artifacts/messy-brief-qwen2.5-1.5b-q4_k_m.gguf"
+        if [ -s "$$output" ]; then
+          echo "Messy brief GGUF already exists at $$output"
+          exit 0
+        fi
+        tmp="$${output}.tmp"
+        rm -f "$$tmp"
+        curl -fL --retry 3 --retry-delay 2 -o "$$tmp" "$$url"
+        mv "$$tmp" "$$output"
+        echo "Downloaded messy brief GGUF to $$output"
+
+  ollama-create-messy-brief:
+    image: ollama/ollama:latest
+    depends_on:
+      ollama:
+        condition: service_started
+      ollama-download-messy-brief:
+        condition: service_completed_successfully
+    restart: "no"
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+      MESSY_BRIEF_MODEL_NAME: ${MESSY_BRIEF_MODEL_NAME:-messy-brief-local}
+    volumes:
+      - ollama-model-artifacts:/model-artifacts:ro
+    entrypoint:
+      - /bin/sh
+      - -c
+    command:
+      - |
+        set -eu
+        until ollama list >/dev/null 2>&1; do
+          sleep 2
+        done
+        model="$${MESSY_BRIEF_MODEL_NAME}"
+        gguf="/model-artifacts/messy-brief-qwen2.5-1.5b-q4_k_m.gguf"
+        modelfile="/tmp/messy-brief.Modelfile"
+        if ollama show "$$model" >/dev/null 2>&1; then
+          echo "Ollama model $$model already exists"
+          exit 0
+        fi
+        {
+          printf 'FROM %s\n\n' "$$gguf"
+          printf 'PARAMETER temperature 0\n'
+          printf 'PARAMETER stop "<|im_end|>"\n'
+          printf 'PARAMETER stop "<|endoftext|>"\n\n'
+          printf 'TEMPLATE """{{ if .System }}<|im_start|>system\n'
+          printf '{{ .System }}<|im_end|>\n'
+          printf '{{ end }}{{ if .Prompt }}<|im_start|>user\n'
+          printf '{{ .Prompt }}<|im_end|>\n'
+          printf '{{ end }}<|im_start|>assistant\n'
+          printf '{{ .Response }}"""\n\n'
+          printf 'SYSTEM """You convert messy notes into concise structured project briefs. Return only valid JSON with these keys: title, summary, key_points, open_questions, risks, next_actions."""\n'
+        } > "$$modelfile"
+        ollama create "$$model" -f "$$modelfile"
+        echo "Created Ollama model $$model"
+
 volumes:
   postgres-data:
   ollama-data:
+  ollama-model-artifacts:
