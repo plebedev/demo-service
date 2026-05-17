@@ -1,0 +1,29 @@
+id: job_search
+display_name: Job Search / Career Context
+artifact_types:
+  - job_description
+  - resume
+  - recruiter_message
+  - interview_notes
+  - company_research
+  - personal_story
+  - compensation_notes
+  - follow_up_notes
+extractors:
+  - job-description-extractor
+  - resume-extractor
+  - interview-notes-extractor
+  - personal-story-extractor
+perspectives:
+  - role_fit
+  - interview_prep
+  - resume_positioning
+  - application_pipeline
+  - compensation_scope_risk
+task_generators:
+  - job-search-task-generator
+limitations:
+  - text, text-file, and extractable-PDF source material only
+  - no OCR
+  - no autonomous execution
+  - no web lookup

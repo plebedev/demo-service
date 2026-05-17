@@ -35,13 +35,8 @@ def test_context_domain_api_loads_fake_domain_in_test(client) -> None:
     response = client.get("/api/context/domains", headers=headers)
 
     assert response.status_code == 200
-    assert response.json()["domains"] == [
-        {
-            "id": "test-domain",
-            "display_name": "Test Domain",
-            "metadata": {"purpose": "architecture-validation"},
-        }
-    ]
+    domain_ids = [domain["id"] for domain in response.json()["domains"]]
+    assert domain_ids == ["job_search", "test-domain"]
 
     detail = client.get("/api/context/domains/test-domain", headers=headers)
     assert detail.status_code == 200
@@ -55,6 +50,30 @@ def test_context_domain_api_loads_fake_domain_in_test(client) -> None:
             "metadata": {},
         }
     ]
+
+
+def test_context_view_api_builds_owner_scoped_perspective(client) -> None:
+    headers = access_headers(client, "context-view")
+
+    created = client.post(
+        "/api/context/domains/test-domain/artifacts",
+        headers=headers,
+        json={
+            "artifact_type_id": "note",
+            "title": "Perspective note",
+            "text": "Perspective content",
+        },
+    )
+    assert created.status_code == 201
+
+    response = client.get(
+        "/api/context/domains/test-domain/views/test-perspective-builder",
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    assert response.json()["view"]["view_definition_id"] == "test-summary"
+    assert response.json()["view"]["sections"][0]["content"] == "Perspective content"
 
 
 def test_context_artifact_api_ingests_and_scopes_outputs(client) -> None:
@@ -110,6 +129,28 @@ def test_context_artifact_api_ingests_and_scopes_outputs(client) -> None:
     assert other_signals.json()["signals"] == []
 
 
+def test_context_artifact_api_persists_generic_context_records(
+    client, db_session
+) -> None:
+    headers = access_headers(client, "context-persist")
+
+    created = client.post(
+        "/api/context/domains/test-domain/artifacts",
+        headers=headers,
+        json={
+            "artifact_type_id": "note",
+            "title": "Persisted note",
+            "text": "Persisted context extraction.",
+        },
+    )
+
+    assert created.status_code == 201
+    assert db_session.scalar(select(ContextArtifactRecord).limit(1)) is not None
+    assert db_session.scalar(select(ContextSignalRecord).limit(1)) is not None
+    assert db_session.scalar(select(ContextActionableItemRecord).limit(1)) is not None
+    assert db_session.scalar(select(ContextSourceLinkRecord).limit(1)) is not None
+
+
 def test_context_artifact_api_rejects_invalid_domain_and_type(client) -> None:
     headers = access_headers(client, "context-invalid")
 
@@ -126,3 +167,13 @@ def test_context_artifact_api_rejects_invalid_domain_and_type(client) -> None:
         json={"artifact_type_id": "missing-type", "text": "content"},
     )
     assert missing_type.status_code == 400
+
+
+from sqlalchemy import select
+
+from app.models.context_engine import (
+    ContextActionableItemRecord,
+    ContextArtifactRecord,
+    ContextSignalRecord,
+    ContextSourceLinkRecord,
+)

@@ -14,6 +14,7 @@ from app.core.context_engine.models import (
     ArtifactType,
     ExtractionResult,
     IngestionRequest,
+    PerspectiveBuildContext,
     PerspectiveView,
 )
 
@@ -73,7 +74,7 @@ class PerspectiveBuilder(Protocol):
         """Stable perspective builder id."""
         ...
 
-    def build(self, artifact: Artifact) -> PerspectiveView:
+    def build(self, context: PerspectiveBuildContext) -> PerspectiveView:
         """Build a generic perspective view."""
         ...
 

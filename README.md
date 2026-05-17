@@ -32,7 +32,10 @@ routing.
   `run_events`, final brief storage, and post-processor audit results
 - domain-neutral Context Engine infrastructure with domain-pack registration,
   generic artifact ingestion, extraction orchestration, provenance/source links,
-  repository interfaces, and an in-memory adapter
+  perspective views, actionable-item generation, repository interfaces, and
+  durable SQLAlchemy-backed generic persistence
+- first real Context Engine domain pack, `job_search`, under
+  `app/domains/job_search/`
 - pytest coverage for invite validation, token validation, and protected route access control
   plus demo-run creation, retrieval, editing, submission, and deterministic ingestion coverage
 - Production Dockerfile
@@ -53,7 +56,10 @@ routing.
 |-- app/
 |   |-- core/
 |   |   `-- context_engine/
-|   `-- domains/
+|   |-- domains/
+|   |   |-- job_search/
+|   |   `-- test_domain/
+|   `-- models/
 |-- text-tools/
 |-- deploy/
 |   |-- helm/
@@ -103,9 +109,13 @@ app/
 |       |-- models.py
 |       |-- registry.py
 |       |-- service.py
+|       |-- sqlalchemy_storage.py
 |       `-- storage.py
 |-- domains/
+|   |-- job_search/
 |   `-- test_domain/
+|-- models/
+|   `-- context_engine.py
 |-- schemas/
 |   `-- context.py
 `-- api/
@@ -113,9 +123,55 @@ app/
         `-- context.py
 ```
 
-The fake `app/domains/test_domain/` pack exists only to validate extension loading, extractor execution, view registration, and task generation. It is loaded by the app factory only when `ENVIRONMENT=test`. Local and deployed environments may legitimately start with an empty Context Engine registry until real domain packs are registered.
+The `app/domains/job_search/` pack is the first real domain pack. It registers
+career-context artifact types, deterministic extractors, perspective builders,
+view definitions, and task generators. Job-search interpretation stays inside
+that domain folder; shared Context Engine modules only know about generic
+artifacts, chunks, source links, signals, perspectives, and actionable items.
 
-The current storage adapter is process-local and in-memory. Durable storage should be introduced behind `ContextRepository` rather than by coupling Context Engine orchestration directly to SQLAlchemy. If schema changes are added later, use Alembic and keep Oracle Autonomous Database compatibility first. Do not introduce a graph database or separate vector database yet.
+The fake `app/domains/test_domain/` pack exists only to validate extension
+loading, extractor execution, view registration, and task generation. It is
+loaded by the app factory only when `ENVIRONMENT=test`.
+
+Context Engine persistence is behind `ContextRepository`. The runtime app uses
+`SQLAlchemyContextRepository` with generic tables for artifacts, chunks,
+entities, relationships, signals, actionable items, and source-link audit rows.
+Structured payloads are serialized into text columns rather than native JSON
+columns for Oracle compatibility. No graph database or separate vector database
+is used.
+
+### Job Search domain pack
+
+`job_search` supports these artifact types:
+
+- `job_description`
+- `resume`
+- `recruiter_message`
+- `interview_notes`
+- `company_research`
+- `personal_story`
+- `compensation_notes`
+- `follow_up_notes`
+
+The MVP extractors are rule-based and source-grounded:
+
+- `JobDescriptionExtractor`: role title, company, seniority, responsibilities,
+  technologies, leadership expectations, compensation, location constraints,
+  unusual scope indicators, and inferred risks
+- `ResumeExtractor`: companies, roles, technical skills, platform experience,
+  AI/agent experience, measurable outcomes, and leadership signals
+- `InterviewNotesExtractor`: concerns, open questions, technical themes, risks,
+  and next actions
+- `PersonalStoryExtractor`: situation, action, result, competencies,
+  leadership themes, and technical themes
+
+Registered perspective views:
+
+- `role_fit`
+- `interview_prep`
+- `resume_positioning`
+- `application_pipeline`
+- `compensation_scope_risk`
 
 ### Context Engine APIs
 
@@ -127,6 +183,7 @@ GET  /api/context/domains/{domain_id}
 POST /api/context/domains/{domain_id}/artifacts
 GET  /api/context/domains/{domain_id}/signals
 GET  /api/context/domains/{domain_id}/tasks
+GET  /api/context/domains/{domain_id}/views/{view_definition_id}
 ```
 
 These APIs intentionally avoid domain-specific top-level paths such as `/jobs`, `/interviews`, or `/resume-analysis`.
@@ -142,6 +199,15 @@ validate domain
   -> store generic outputs
   -> preserve source links
   -> return ingestion result
+```
+
+Example job-search ingestion:
+
+```bash
+curl -X POST "$BACKEND/api/context/domains/job_search/artifacts" \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"artifact_type_id":"job_description","title":"Staff Platform Engineer","text":"Title: Staff Platform Engineer\nCompany: Acme AI\nResponsibilities: lead Kubernetes and AI platform work."}'
 ```
 
 ## Rust text tools sidecar

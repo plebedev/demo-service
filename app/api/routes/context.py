@@ -21,6 +21,7 @@ from app.schemas.context import (
     DomainListResponse,
     DomainSummaryResponse,
     ExtensionSummaryResponse,
+    PerspectiveViewResponse,
     ViewDefinitionResponse,
 )
 
@@ -188,3 +189,34 @@ def list_context_tasks(
             owner_id=str(claims.invitation_code_id),
         )
     )
+
+
+@router.get(
+    "/domains/{domain_id}/views/{view_definition_id}",
+    response_model=PerspectiveViewResponse,
+)
+def get_context_view(
+    domain_id: str,
+    view_definition_id: str,
+    claims: AccessTokenClaims = Depends(get_current_access_token),
+    service: ContextEngineService = Depends(get_context_engine),
+) -> PerspectiveViewResponse:
+    """Build one caller-owned perspective view for a Context Engine domain."""
+    try:
+        view = service.build_perspective(
+            domain_id=domain_id,
+            view_definition_id=view_definition_id,
+            owner_type=OwnerType.INVITATION_CODE,
+            owner_id=str(claims.invitation_code_id),
+        )
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Context domain not found.",
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+    return PerspectiveViewResponse(view=view)

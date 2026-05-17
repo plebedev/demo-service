@@ -9,18 +9,21 @@ class ExperienceId(StrEnum):
     """Stable ids stored in invitation-code labels and access-token claims."""
 
     MESSY_NOTES = "messy-notes"
+    CONTEXT_WORKBENCH = "context-workbench"
     RAG_DEMO = "rag-demo"
     VOICE_DEMO = "voice-demo"
 
 
 EXPERIENCE_ROUTES: dict[ExperienceId, str] = {
     ExperienceId.MESSY_NOTES: "/messy-notes",
+    ExperienceId.CONTEXT_WORKBENCH: "/context-workbench",
     ExperienceId.RAG_DEMO: "/rag-demo",
     ExperienceId.VOICE_DEMO: "/voice-demo",
 }
 
 EXPERIENCE_LABELS: dict[ExperienceId, str] = {
     ExperienceId.MESSY_NOTES: "Messy Notes",
+    ExperienceId.CONTEXT_WORKBENCH: "Context Workbench",
     ExperienceId.RAG_DEMO: "RAG Demo",
     ExperienceId.VOICE_DEMO: "Voice Demo",
 }
@@ -28,6 +31,9 @@ EXPERIENCE_LABELS: dict[ExperienceId, str] = {
 EXPERIENCE_DESCRIPTIONS: dict[ExperienceId, str] = {
     ExperienceId.MESSY_NOTES: (
         "Turn pasted text, text files, or extractable PDFs into a structured brief."
+    ),
+    ExperienceId.CONTEXT_WORKBENCH: (
+        "A source-grounded Context Engine experience powered by reusable domain packs."
     ),
     ExperienceId.RAG_DEMO: (
         "A retrieval-grounded demo workspace with persona configuration and scoped document setup."

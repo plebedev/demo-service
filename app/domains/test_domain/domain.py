@@ -15,6 +15,7 @@ from app.core.context_engine.models import (
     ExtractionResult,
     IngestionRequest,
     OwnerType,
+    PerspectiveBuildContext,
     PerspectiveView,
     ReadinessStatus,
     SourceLink,
@@ -93,8 +94,9 @@ class TestPerspectiveBuilder:
 
     id: str = "test-perspective-builder"
 
-    def build(self, artifact: Artifact) -> PerspectiveView:
+    def build(self, context: PerspectiveBuildContext) -> PerspectiveView:
         """Build a simple generic perspective for a test artifact."""
+        artifact = context.artifacts[0]
         return PerspectiveView(
             view_definition_id="test-summary",
             title="Test Summary",

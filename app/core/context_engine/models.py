@@ -25,6 +25,11 @@ class OwnerType(StrEnum):
 class ReadinessStatus(StrEnum):
     """Generic readiness state for actionable context items."""
 
+    READY_FOR_AGENT = "ready_for_agent"
+    NEEDS_HUMAN_CLARIFICATION = "needs_human_clarification"
+    NEEDS_SOURCE_MATERIAL = "needs_source_material"
+    NEEDS_DECISION = "needs_decision"
+    NEEDS_REVIEW = "needs_review"
     READY = "ready"
     NEEDS_INPUT = "needs_input"
     BLOCKED = "blocked"
@@ -185,3 +190,17 @@ class IngestionResult(BaseModel):
     signals: list[ContextSignal]
     actionable_items: list[ActionableItem]
     extractor_ids: list[str]
+
+
+class PerspectiveBuildContext(BaseModel):
+    """Owner-scoped generic context used to materialize a perspective view."""
+
+    domain_id: str
+    owner_type: OwnerType
+    owner_id: str
+    artifacts: list[Artifact] = Field(default_factory=list)
+    chunks: list[ArtifactChunk] = Field(default_factory=list)
+    entities: list[ContextEntity] = Field(default_factory=list)
+    relationships: list[ContextRelationship] = Field(default_factory=list)
+    signals: list[ContextSignal] = Field(default_factory=list)
+    actionable_items: list[ActionableItem] = Field(default_factory=list)

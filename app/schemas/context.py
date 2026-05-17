@@ -14,6 +14,7 @@ from app.core.context_engine.models import (
     ContextEntity,
     ContextRelationship,
     ContextSignal,
+    PerspectiveView,
 )
 
 
@@ -86,3 +87,9 @@ class ActionableItemListResponse(BaseModel):
     """Owner-scoped actionable item list."""
 
     tasks: list[ActionableItem]
+
+
+class PerspectiveViewResponse(BaseModel):
+    """Owner-scoped materialized perspective view."""
+
+    view: PerspectiveView

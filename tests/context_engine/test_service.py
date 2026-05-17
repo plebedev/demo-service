@@ -101,7 +101,12 @@ def test_fake_domain_perspective_builder_and_task_generator_work() -> None:
             text="Perspective content",
         )
     )
-    view = pack.perspective_builders[0].build(result.artifact)
+    view = service.build_perspective(
+        domain_id="test-domain",
+        view_definition_id="test-perspective-builder",
+        owner_type=OwnerType.INVITATION_CODE,
+        owner_id="42",
+    )
 
     assert view.view_definition_id == "test-summary"
     assert view.sections[0].content == "Perspective content"

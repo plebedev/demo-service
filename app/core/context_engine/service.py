@@ -3,7 +3,14 @@
 from __future__ import annotations
 
 from app.core.context_engine.chunking import SimpleTextChunker
-from app.core.context_engine.models import Artifact, IngestionRequest, IngestionResult
+from app.core.context_engine.models import (
+    Artifact,
+    IngestionRequest,
+    IngestionResult,
+    OwnerType,
+    PerspectiveBuildContext,
+    PerspectiveView,
+)
 from app.core.context_engine.registry import DomainRegistry
 from app.core.context_engine.storage import ContextRepository
 
@@ -110,3 +117,62 @@ class ContextEngineService:
             actionable_items=actionable_items,
             extractor_ids=extractor_ids,
         )
+
+    def build_perspective(
+        self,
+        *,
+        domain_id: str,
+        view_definition_id: str,
+        owner_type: OwnerType,
+        owner_id: str,
+    ) -> PerspectiveView:
+        """Build one registered perspective from owner-scoped generic context."""
+        domain = self.registry.get_domain(domain_id)
+        builder = next(
+            (
+                candidate
+                for candidate in domain.perspective_builders
+                if candidate.id == view_definition_id
+            ),
+            None,
+        )
+        if builder is None:
+            raise ValueError(
+                f"Perspective '{view_definition_id}' is not registered for "
+                f"domain '{domain_id}'."
+            )
+
+        artifacts = self.repository.list_artifacts(
+            domain_id=domain_id,
+            owner_type=owner_type,
+            owner_id=owner_id,
+        )
+        artifact_ids = [artifact.id for artifact in artifacts]
+        context = PerspectiveBuildContext(
+            domain_id=domain_id,
+            owner_type=owner_type,
+            owner_id=owner_id,
+            artifacts=artifacts,
+            chunks=self.repository.list_chunks_for_artifacts(artifact_ids),
+            entities=self.repository.list_entities(
+                domain_id=domain_id,
+                owner_type=owner_type,
+                owner_id=owner_id,
+            ),
+            relationships=self.repository.list_relationships(
+                domain_id=domain_id,
+                owner_type=owner_type,
+                owner_id=owner_id,
+            ),
+            signals=self.repository.list_signals(
+                domain_id=domain_id,
+                owner_type=owner_type,
+                owner_id=owner_id,
+            ),
+            actionable_items=self.repository.list_actionable_items(
+                domain_id=domain_id,
+                owner_type=owner_type,
+                owner_id=owner_id,
+            ),
+        )
+        return builder.build(context)
