@@ -4,6 +4,7 @@ from fastapi import APIRouter
 
 from app.api.routes import (
     access,
+    context,
     experiences,
     invitations_admin,
     rag,
@@ -17,6 +18,7 @@ api_router = APIRouter()
 api_router.include_router(system.router)
 api_router.include_router(experiences.router)
 api_router.include_router(access.router)
+api_router.include_router(context.router)
 api_router.include_router(runs.router)
 api_router.include_router(rag.router)
 api_router.include_router(voice.router)

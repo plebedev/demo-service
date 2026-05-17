@@ -1,6 +1,6 @@
 # Invite-Only Demo Backend API
 
-This repository is the phase-1 backend API for the invite-only demo. It mirrors the frontend repo's no-registry deploy approach: build locally, ship the image and committed source to the VM, import into `k3s`, and deploy with Helm.
+This repository is the backend API for the invite-only demo platform. It mirrors the frontend repo's no-registry deploy approach: build locally, ship the image and committed source to the VM, import into `k3s`, and deploy with Helm.
 
 The browser-facing demo is deployed at [demo.lebedev.ai](https://demo.lebedev.ai);
 this backend is reached through the frontend/BFF and cluster-internal service
@@ -11,10 +11,11 @@ routing.
 - FastAPI app with:
   - `/health`
   - `/ready`
-  - `/api/status` protected by a signed phase-1 access token
+  - `/api/status` protected by a signed access token
   - `/api/access/redeem` for invitation-code validation and token issuance
   - `/api/access/invite-requests` for public invite request intake
   - `/api/access/verify` for stored-token validation
+  - `/api/context/*` protected generic Context Engine endpoints
   - `/api/runs/*` protected endpoints for draft creation, listing, editing, and submission
   - `/api/internal/admin/invitations/*` for internal invite management
   - placeholder webhook endpoints for Twilio and Plivo
@@ -22,13 +23,16 @@ routing.
 - Pydantic 2 settings and response models
 - Alembic config and an initial migration
 - invitation code and redemption tracking tables
-- persisted `runs` table for the M2 demo shell
-- normalized ingestion storage for M3: raw pasted text, accepted file extracts,
+- persisted `runs` table for the protected demo shell
+- normalized ingestion storage: raw pasted text, accepted file extracts,
   and summary/warning metadata
 - YAML-backed workflow config loading, including per-agent model/provider,
   tool access, bounded handoffs, parallel metadata, and post-processor references
-- bounded M5 runtime execution for `messy-notes-v1`, with structured
+- bounded runtime execution for `messy-notes-v1`, with structured
   `run_events`, final brief storage, and post-processor audit results
+- domain-neutral Context Engine infrastructure with domain-pack registration,
+  generic artifact ingestion, extraction orchestration, provenance/source links,
+  repository interfaces, and an in-memory adapter
 - pytest coverage for invite validation, token validation, and protected route access control
   plus demo-run creation, retrieval, editing, submission, and deterministic ingestion coverage
 - Production Dockerfile
@@ -47,6 +51,9 @@ routing.
 |-- README.md
 |-- alembic/
 |-- app/
+|   |-- core/
+|   |   `-- context_engine/
+|   `-- domains/
 |-- text-tools/
 |-- deploy/
 |   |-- helm/
@@ -68,6 +75,74 @@ routing.
 - Postgres for local development
 - Oracle Autonomous Database via walletless TLS in deployed environments
 - Rust / Axum for the internal `demo-text-tools` sidecar
+
+## Context Engine infrastructure
+
+The Context Engine is a shared backend platform capability for reusable, domain-pack-driven experiences. It is not a standalone service. Treat it as context operating infrastructure that can support many future domains while keeping shared core code domain-neutral.
+
+Current backend responsibilities:
+
+- register zero, one, or many domain packs through `DomainRegistry`
+- expose generic extension contracts for `ArtifactIngestor`, `ArtifactChunker`, `Extractor`, `PerspectiveBuilder`, `TaskGenerator`, and `ViewDefinition`
+- ingest artifacts through a generic orchestration flow
+- split artifacts into source-linked chunks
+- run registered extractors and task generators
+- store generic entities, relationships, signals, and actionable items through repository abstractions
+- preserve `SourceLink` provenance from derived context back to the source artifact/chunk
+- scope records through generic owner metadata so the existing invite-code access model remains usable
+
+Current package layout:
+
+```text
+app/
+|-- core/
+|   `-- context_engine/
+|       |-- chunking.py
+|       |-- factory.py
+|       |-- interfaces.py
+|       |-- models.py
+|       |-- registry.py
+|       |-- service.py
+|       `-- storage.py
+|-- domains/
+|   `-- test_domain/
+|-- schemas/
+|   `-- context.py
+`-- api/
+    `-- routes/
+        `-- context.py
+```
+
+The fake `app/domains/test_domain/` pack exists only to validate extension loading, extractor execution, view registration, and task generation. It is loaded by the app factory only when `ENVIRONMENT=test`.
+
+The current storage adapter is process-local and in-memory. Durable storage should be introduced behind `ContextRepository` rather than by coupling Context Engine orchestration directly to SQLAlchemy. If schema changes are added later, use Alembic and keep Oracle Autonomous Database compatibility first. Do not introduce a graph database or separate vector database yet.
+
+### Context Engine APIs
+
+The generic Context Engine routes are protected by the existing signed access token dependency and derive ownership from the caller's `invitation_code_id`.
+
+```text
+GET  /api/context/domains
+GET  /api/context/domains/{domain_id}
+POST /api/context/domains/{domain_id}/artifacts
+GET  /api/context/domains/{domain_id}/signals
+GET  /api/context/domains/{domain_id}/tasks
+```
+
+These APIs intentionally avoid domain-specific top-level paths such as `/jobs`, `/interviews`, or `/resume-analysis`.
+
+The ingestion flow is:
+
+```text
+validate domain
+  -> store artifact
+  -> chunk artifact
+  -> run registered extractors
+  -> run registered task generators
+  -> store generic outputs
+  -> preserve source links
+  -> return ingestion result
+```
 
 ## Rust text tools sidecar
 
@@ -136,13 +211,13 @@ Important variables:
 | `DB_PASSWORD` | Oracle database password, injected from a Kubernetes Secret |
 | `RUN_MIGRATIONS_ON_STARTUP` | If `true`, the container upgrades to the latest Alembic revision before app start |
 | `ACCESS_TOKEN_SIGNING_KEY` | HMAC signing key for invite-issued access tokens |
-| `ACCESS_TOKEN_TTL_SECONDS` | Lifetime for the signed phase-1 access token |
+| `ACCESS_TOKEN_TTL_SECONDS` | Lifetime for the signed access token |
 | `ADMIN_API_SECRET` | Shared secret for internal invitation-management endpoints |
 | `DEFAULT_WORKFLOW_KEY` | Workflow key assigned to newly created runs |
 | `WORKFLOW_CONFIG_DIR` | Directory containing workflow YAML definitions |
 | `POST_PROCESSOR_CONFIG_PATH` | YAML file defining workflow post-processors |
-| `MAX_FILES_PER_RUN` | Phase-1 limit for files per run |
-| `MAX_FILE_SIZE_BYTES` | Phase-1 limit for file upload size |
+| `MAX_FILES_PER_RUN` | Limit for files per run |
+| `MAX_FILE_SIZE_BYTES` | Limit for file upload size |
 | `MAX_EXTRACTED_TEXT_BYTES` | Total extracted-text budget kept from accepted files |
 | `MAX_PASTED_TEXT_BYTES` | Maximum raw pasted text persisted on the run |
 | `MAX_TOTAL_WORKFLOW_TEXT_BYTES` | Maximum normalized text passed to workflow execution |
@@ -192,13 +267,13 @@ For Oracle Cloud deployments, prefer OCI Vault / Secret Management as the real s
 
 This is a demo, not a general-purpose assistant.
 
-Supported phase-1 inputs:
+Supported inputs:
 
 - pasted text
 - text file upload
 - PDF upload with extractable text
 
-Not supported in phase 1:
+Not supported:
 
 - images
 - OCR
@@ -244,9 +319,9 @@ Invite fulfillment records `fulfillment_status`, `fulfilled_at`,
 fails, the request and generated code remain persisted and the failure is
 logged for later retry.
 
-## M6 demo polish APIs
+## Protected run APIs
 
-M6 adds protected API support for first-run usability and bounded follow-up:
+Protected run APIs support first-run usability and bounded follow-up:
 
 - `GET /api/runs/samples` returns curated messy-note sample sets
 - `GET /api/runs/<run_id>/summary` returns a compact execution summary for demos
@@ -305,7 +380,7 @@ UPDATE runs SET invitation_code_id = <chosen_id> WHERE invitation_code_id IS NUL
 A later migration can make `runs.invitation_code_id` non-null after all legacy
 rows have been assigned.
 
-## M3 ingestion behavior
+## Run ingestion behavior
 
 The run-ingestion endpoint accepts:
 
@@ -331,7 +406,7 @@ Trimming is deterministic and intentionally boring:
 
 The backend does not imply that it ranked or fully evaluated dropped notes. If something is too large, the stored warnings say so plainly.
 
-## M5 runtime execution
+## Runtime execution
 
 Submitting a run now executes the configured messy-notes workflow
 synchronously:
@@ -355,7 +430,7 @@ task lint
 task build
 ```
 
-## M4 workflow config
+## Workflow config
 
 Workflow definitions now live under:
 
@@ -388,7 +463,15 @@ OLLAMA_BASE_URL=http://127.0.0.1:11434/v1
 OLLAMA_API_KEY=ollama
 ```
 
-The M5 runtime builds on workflow config instead of introducing a separate planner.
+Runtime execution builds on workflow config instead of introducing a separate planner.
+
+## Current TODOs
+
+- Add durable Context Engine storage behind `ContextRepository`.
+- Add real domain packs under `app/domains/` while keeping `app/core/context_engine/` domain-neutral.
+- Add experience-facing Context Engine workflows and UI through the existing frontend/BFF access model.
+- Replace the fake `test_domain` pack with production domain packs for real experiences; keep `test_domain` for validation tests only.
+- Consider Rust sidecar helpers later for deterministic chunking, normalization, hashing, or deduplication if Python becomes a bottleneck.
 
 ## Local development
 

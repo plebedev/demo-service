@@ -4,6 +4,46 @@
 
 This repo is the backend API only. It is a FastAPI service with SQLAlchemy, Alembic, and Oracle support for deployed environments.
 
+It is also the backend home for shared Context Engine infrastructure, domain-pack registration, backend experience registration, workflow execution, artifact ingestion, persistence, provenance, extraction orchestration, context graph primitives, generic signals, model registry, telemetry, and future MCP exposure.
+
+This repo is not a standalone job-search service. Job Search / Career Context is the first reference domain pack, and job-search logic must stay out of shared core modules.
+
+## Platform structure
+
+Use these locations for Context Engine work:
+
+- shared domain-neutral core: `app/core/context_engine/`
+- domain packs: `app/domains/`
+- first reference domain pack: `app/domains/job_search/`
+- backend experience registration/composition: `app/experiences/`
+
+Forbidden shared-core locations:
+
+- `app/core/job_search/`
+- `app/core/interviews/`
+- `app/core/resumes/`
+- `app/core/job_requirements.py`
+- `app/core/interview_questions.py`
+
+Shared core should use generic names such as `Artifact`, `ArtifactType`, `ArtifactChunk`, `EmbeddingRecord`, `SourceLink`, `EvidenceLink`, `ContextSignal`, `ContextEntity`, `ContextRelationship`, `Perspective`, `PerspectiveView`, `ViewSection`, `ActionableItem`, `ReadinessStatus`, `DomainPack`, `DomainRegistry`, `Extractor`, `PerspectiveBuilder`, `TaskGenerator`, `ViewDefinition`, `Experience`, `ExperienceRegistry`, and `WorkflowDefinition`.
+
+Domain-specific names may exist under `app/domains/job_search/`.
+
+## Context Engine rules
+
+- Keep `app/core/context_engine/` domain-neutral.
+- Keep domain-specific logic behind registered domain-pack implementations.
+- Keep experience-specific logic behind registered experiences.
+- The core should be able to load zero, one, or many domain packs.
+- The core should be able to load zero, one, or many experiences.
+- A domain pack should be replaceable without changing core code.
+- An experience should be replaceable without changing core code.
+- Add unit tests for interface and registry behavior.
+- Use clear Pydantic models for contracts.
+- If database integration is not already present for a feature, implement repository interfaces and an in-memory adapter first.
+- Do not introduce a graph database or separate vector DB for MVP.
+- Do not tightly couple domain packs to future MCP exposure.
+
 ## Normal workflow
 
 ### Local
@@ -108,3 +148,5 @@ Defaults:
 - If you change SQL used in readiness/status or migrations, consider Oracle syntax differences first
 - If you change API responses used by the frontend, update `demo-web-app` in the same session when possible
 - Do not mark migration work complete until the Oracle production path has been considered explicitly
+- If you add Context Engine core behavior, explicitly confirm that no job-search logic leaked into core
+- If you add backend experience behavior, explicitly confirm that it reuses shared auth, orchestration, storage, ingestion, and registry infrastructure
