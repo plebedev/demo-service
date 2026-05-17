@@ -128,6 +128,8 @@ career-context artifact types, deterministic extractors, perspective builders,
 view definitions, and task generators. Job-search interpretation stays inside
 that domain folder; shared Context Engine modules only know about generic
 artifacts, chunks, source links, signals, perspectives, and actionable items.
+The pack's `domain.yaml` manifest is loaded by `register.py` for artifact type,
+view, unsupported-input, and extractor-routing metadata.
 
 The fake `app/domains/test_domain/` pack exists only to validate extension
 loading, extractor execution, view registration, and task generation. It is
@@ -137,8 +139,9 @@ Context Engine persistence is behind `ContextRepository`. The runtime app uses
 `SQLAlchemyContextRepository` with generic tables for artifacts, chunks,
 entities, relationships, signals, actionable items, and source-link audit rows.
 Structured payloads are serialized into text columns rather than native JSON
-columns for Oracle compatibility. No graph database or separate vector database
-is used.
+columns for Oracle compatibility. Derived records must carry source links; the
+SQLAlchemy repository rejects source-link-less outputs instead of silently
+dropping them. No graph database or separate vector database is used.
 
 ### Job Search domain pack
 
@@ -164,6 +167,11 @@ The MVP extractors are rule-based and source-grounded:
   and next actions
 - `PersonalStoryExtractor`: situation, action, result, competencies,
   leadership themes, and technical themes
+
+The remaining registered artifact types are intentionally supported for
+ingestion and provenance first. Their `domain.yaml` entries currently have empty
+`extractor_ids`, so they persist as source material and can seed generic tasks
+without pretending richer extraction exists yet.
 
 Registered perspective views:
 

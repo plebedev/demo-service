@@ -4,7 +4,16 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Identity, Integer, String, Text, func
+from sqlalchemy import (
+    DateTime,
+    ForeignKey,
+    Identity,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -35,6 +44,13 @@ class ContextArtifactChunkRecord(Base):
     """Persisted generic source artifact chunk."""
 
     __tablename__ = "context_artifact_chunks"
+    __table_args__ = (
+        UniqueConstraint(
+            "artifact_id",
+            "chunk_index",
+            name="uq_context_artifact_chunks_artifact_index",
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     artifact_id: Mapped[str] = mapped_column(
@@ -123,7 +139,12 @@ class ContextSourceLinkRecord(Base):
     id: Mapped[int] = mapped_column(
         Integer, Identity(), primary_key=True, autoincrement=True
     )
-    artifact_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    artifact_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("context_artifacts.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    )
     chunk_id: Mapped[str] = mapped_column(String(64), nullable=True)
     start_offset: Mapped[int] = mapped_column(Integer, nullable=True)
     end_offset: Mapped[int] = mapped_column(Integer, nullable=True)

@@ -27,6 +27,7 @@ class JobDescriptionExtractor:
     """Extract role requirements, constraints, and risks from job descriptions."""
 
     id: str = "job-description-extractor"
+    artifact_type_ids: tuple[str, ...] = ("job_description",)
 
     def extract(
         self,
@@ -44,7 +45,7 @@ class JobDescriptionExtractor:
 
         title = self._extract_labeled_value(text, ["title", "role"])
         if title is None:
-            title = self._first_heading(text)
+            title = self._role_like_heading(text)
         if title is not None:
             link = source_for_match(chunks, title, label="role title")
             entities.append(entity("role", title, link))
@@ -136,8 +137,8 @@ class JobDescriptionExtractor:
             )
         )
 
-        risk_source = (unusual_scope or leadership or responsibility_lines)[0]
         if unusual_scope or len(responsibility_lines) >= 6:
+            risk_source = (unusual_scope or leadership or responsibility_lines)[0]
             risk_text = "Role may have broad or ambiguous scope."
             signals.append(
                 signal(
@@ -177,9 +178,18 @@ class JobDescriptionExtractor:
                 return normalize_space(match.group(1))[:160]
         return None
 
-    def _first_heading(self, text: str) -> str | None:
+    def _role_like_heading(self, text: str) -> str | None:
         for line in text.splitlines():
             cleaned = normalize_space(line)
-            if cleaned and len(cleaned) <= 120:
+            if (
+                cleaned
+                and len(cleaned) <= 120
+                and not cleaned.lower().startswith(("http://", "https://", "www."))
+                and re.search(
+                    r"\b(engineer|developer|architect|manager|director|designer|analyst|lead)\b",
+                    cleaned,
+                    re.IGNORECASE,
+                )
+            ):
                 return cleaned
         return None

@@ -25,6 +25,7 @@ class ResumeExtractor:
     """Extract source-grounded career evidence from resumes."""
 
     id: str = "resume-extractor"
+    artifact_type_ids: tuple[str, ...] = ("resume",)
 
     def extract(
         self,

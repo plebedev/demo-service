@@ -103,7 +103,7 @@ def test_fake_domain_perspective_builder_and_task_generator_work() -> None:
     )
     view = service.build_perspective(
         domain_id="test-domain",
-        view_definition_id="test-perspective-builder",
+        view_definition_id="test-summary",
         owner_type=OwnerType.INVITATION_CODE,
         owner_id="42",
     )

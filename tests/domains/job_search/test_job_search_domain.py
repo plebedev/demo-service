@@ -60,6 +60,9 @@ def test_job_search_domain_registers_expected_extensions() -> None:
         "application_pipeline",
         "compensation_scope_risk",
     ]
+    assert pack.artifact_types[2].id == "recruiter_message"
+    assert pack.artifact_types[2].metadata["extractor_ids"] == []
+    assert pack.metadata["extractor_routing"]["company_research"] == []
 
 
 def test_job_description_extraction_outputs_source_grounded_context() -> None:
@@ -104,6 +107,28 @@ def test_job_description_extraction_outputs_source_grounded_context() -> None:
     assert {item.item_type for item in result.actionable_items}.issuperset(
         {"prepare_interview_brief", "research_company", "clarify_scope"}
     )
+    assert result.extractor_ids == ["job-description-extractor"]
+
+
+def test_job_description_role_title_fallback_requires_role_language() -> None:
+    service = build_service()
+
+    result = service.ingest_artifact(
+        IngestionRequest(
+            domain_id="job_search",
+            artifact_type_id="job_description",
+            owner_type=OwnerType.INVITATION_CODE,
+            owner_id="invite-1",
+            title="JD",
+            text=(
+                "Acme Careers\n"
+                "https://example.test/jobs/123\n"
+                "We are hiring for a product team.\n"
+            ),
+        )
+    )
+
+    assert "role_title" not in {signal.signal_type for signal in result.signals}
 
 
 def test_resume_interview_and_story_extractors_feed_perspectives() -> None:
@@ -157,6 +182,7 @@ def test_resume_interview_and_story_extractors_feed_perspectives() -> None:
         "Open Questions",
     ]
     assert role_fit.sections[0].evidence_links
+    assert role_fit.sections[0].evidence_links[0].confidence is None
     assert interview.sections[1].title == "Best Supporting Stories"
     assert "reduced incidents" in (interview.sections[1].content or "")
 

@@ -78,7 +78,7 @@ class TestDomainExtractor:
         item = ActionableItem(
             item_type="test_action",
             title="Review artifact",
-            readiness_status=ReadinessStatus.READY,
+            readiness_status=ReadinessStatus.READY_FOR_AGENT,
             source_links=[source_link],
         )
         return ExtractionResult(
@@ -92,7 +92,7 @@ class TestDomainExtractor:
 class TestPerspectiveBuilder:
     """Perspective builder used to prove domain registration."""
 
-    id: str = "test-perspective-builder"
+    id: str = "test-summary"
 
     def build(self, context: PerspectiveBuildContext) -> PerspectiveView:
         """Build a simple generic perspective for a test artifact."""
@@ -122,7 +122,7 @@ class TestTaskGenerator:
             ActionableItem(
                 item_type="test_generated_task",
                 title=f"Check {artifact.title or 'artifact'}",
-                readiness_status=ReadinessStatus.NEEDS_INPUT,
+                readiness_status=ReadinessStatus.NEEDS_HUMAN_CLARIFICATION,
                 source_links=[SourceLink(artifact_id=artifact.id)],
             )
         ]

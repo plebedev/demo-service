@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Iterable
+from collections.abc import Callable
 from typing import Any
 
 from sqlalchemy import select
@@ -49,19 +49,37 @@ def _source_links_load(value: str | None) -> list[SourceLink]:
     return [SourceLink(**item) for item in _json_load(value, [])]
 
 
-def _owner_from_sources(
+OwnerCache = dict[str, tuple[str, OwnerType, str] | None]
+
+
+def _owner_from_required_sources(
     session: Session,
-    links: Iterable[SourceLink],
-) -> tuple[str, OwnerType, str] | None:
+    links: list[SourceLink],
+    cache: OwnerCache,
+    record_type: str,
+    record_id: str,
+) -> tuple[str, OwnerType, str]:
+    if not links:
+        raise ValueError(f"{record_type} '{record_id}' must include source links.")
     for link in links:
-        artifact = session.get(ContextArtifactRecord, link.artifact_id)
-        if artifact is not None:
-            return (
-                artifact.domain_id,
-                OwnerType(artifact.owner_type),
-                artifact.owner_id,
+        if link.artifact_id not in cache:
+            artifact = session.get(ContextArtifactRecord, link.artifact_id)
+            cache[link.artifact_id] = (
+                (
+                    artifact.domain_id,
+                    OwnerType(artifact.owner_type),
+                    artifact.owner_id,
+                )
+                if artifact is not None
+                else None
             )
-    return None
+        owner = cache[link.artifact_id]
+        if owner is not None:
+            return owner
+    raise ValueError(
+        f"{record_type} '{record_id}' references unknown source artifact "
+        f"'{links[0].artifact_id}'."
+    )
 
 
 class SQLAlchemyContextRepository:
@@ -115,10 +133,15 @@ class SQLAlchemyContextRepository:
     def store_entities(self, entities: list[ContextEntity]) -> list[ContextEntity]:
         """Persist context entities."""
         with self.session_factory() as session:
+            owner_cache: OwnerCache = {}
             for entity in entities:
-                owner = _owner_from_sources(session, entity.source_links)
-                if owner is None:
-                    continue
+                owner = _owner_from_required_sources(
+                    session,
+                    entity.source_links,
+                    owner_cache,
+                    "ContextEntity",
+                    entity.id,
+                )
                 domain_id, owner_type, owner_id = owner
                 session.add(
                     ContextEntityRecord(
@@ -141,10 +164,15 @@ class SQLAlchemyContextRepository:
     ) -> list[ContextRelationship]:
         """Persist context relationships."""
         with self.session_factory() as session:
+            owner_cache: OwnerCache = {}
             for relationship in relationships:
-                owner = _owner_from_sources(session, relationship.source_links)
-                if owner is None:
-                    continue
+                owner = _owner_from_required_sources(
+                    session,
+                    relationship.source_links,
+                    owner_cache,
+                    "ContextRelationship",
+                    relationship.id,
+                )
                 domain_id, owner_type, owner_id = owner
                 session.add(
                     ContextRelationshipRecord(
@@ -166,10 +194,15 @@ class SQLAlchemyContextRepository:
     def store_signals(self, signals: list[ContextSignal]) -> list[ContextSignal]:
         """Persist context signals."""
         with self.session_factory() as session:
+            owner_cache: OwnerCache = {}
             for signal in signals:
-                owner = _owner_from_sources(session, signal.source_links)
-                if owner is None:
-                    continue
+                owner = _owner_from_required_sources(
+                    session,
+                    signal.source_links,
+                    owner_cache,
+                    "ContextSignal",
+                    signal.id,
+                )
                 domain_id, owner_type, owner_id = owner
                 session.add(
                     ContextSignalRecord(
@@ -193,10 +226,15 @@ class SQLAlchemyContextRepository:
     ) -> list[ActionableItem]:
         """Persist actionable items."""
         with self.session_factory() as session:
+            owner_cache: OwnerCache = {}
             for item in items:
-                owner = _owner_from_sources(session, item.source_links)
-                if owner is None:
-                    continue
+                owner = _owner_from_required_sources(
+                    session,
+                    item.source_links,
+                    owner_cache,
+                    "ActionableItem",
+                    item.id,
+                )
                 domain_id, owner_type, owner_id = owner
                 session.add(
                     ContextActionableItemRecord(
@@ -215,13 +253,6 @@ class SQLAlchemyContextRepository:
                 self._add_source_link_records(session, item.source_links)
             session.commit()
         return items
-
-    def store_source_links(self, links: list[SourceLink]) -> list[SourceLink]:
-        """Persist source links for provenance queries or audits."""
-        with self.session_factory() as session:
-            self._add_source_link_records(session, links)
-            session.commit()
-        return links
 
     def index_artifact_outputs(
         self,

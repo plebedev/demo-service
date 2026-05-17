@@ -165,6 +165,11 @@ def upgrade() -> None:
         sa.Column("end_offset", sa.Integer(), nullable=True),
         sa.Column("label", sa.String(length=512), nullable=True),
         sa.Column("excerpt", sa.Text(), nullable=True),
+        sa.ForeignKeyConstraint(
+            ["artifact_id"],
+            ["context_artifacts.id"],
+            ondelete="CASCADE",
+        ),
     )
     op.create_index(
         "ix_context_source_links_artifact_id",

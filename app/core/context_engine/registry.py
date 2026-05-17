@@ -19,6 +19,18 @@ class DomainRegistry:
         artifact_type_ids = [artifact_type.id for artifact_type in pack.artifact_types]
         if len(set(artifact_type_ids)) != len(artifact_type_ids):
             raise ValueError(f"Domain '{pack.id}' has duplicate artifact types.")
+        view_ids = [view.id for view in pack.view_definitions]
+        if len(set(view_ids)) != len(view_ids):
+            raise ValueError(f"Domain '{pack.id}' has duplicate view definitions.")
+        builder_ids = [builder.id for builder in pack.perspective_builders]
+        if len(set(builder_ids)) != len(builder_ids):
+            raise ValueError(f"Domain '{pack.id}' has duplicate perspective builders.")
+        missing_view_ids = sorted(set(builder_ids) - set(view_ids))
+        if missing_view_ids:
+            raise ValueError(
+                f"Domain '{pack.id}' has perspective builders without matching "
+                f"view definitions: {', '.join(missing_view_ids)}."
+            )
         self._domains[pack.id] = pack
 
     def get_domain(self, domain_id: str) -> DomainPack:

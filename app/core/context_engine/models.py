@@ -29,11 +29,8 @@ class ReadinessStatus(StrEnum):
     NEEDS_HUMAN_CLARIFICATION = "needs_human_clarification"
     NEEDS_SOURCE_MATERIAL = "needs_source_material"
     NEEDS_DECISION = "needs_decision"
-    NEEDS_REVIEW = "needs_review"
-    READY = "ready"
-    NEEDS_INPUT = "needs_input"
     BLOCKED = "blocked"
-    UNKNOWN = "unknown"
+    NEEDS_REVIEW = "needs_review"
 
 
 class SourceLink(BaseModel):
@@ -152,7 +149,7 @@ class ActionableItem(BaseModel):
     item_type: str
     title: str
     description: str | None = None
-    readiness_status: ReadinessStatus = ReadinessStatus.UNKNOWN
+    readiness_status: ReadinessStatus = ReadinessStatus.NEEDS_REVIEW
     source_links: list[SourceLink] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
 

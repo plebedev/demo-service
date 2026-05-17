@@ -88,6 +88,12 @@ class ContextEngineService:
         actionable_items = []
         extractor_ids = []
         for extractor in domain.extractors:
+            supported_artifact_type_ids = getattr(extractor, "artifact_type_ids", None)
+            if (
+                supported_artifact_type_ids is not None
+                and request.artifact_type_id not in supported_artifact_type_ids
+            ):
+                continue
             result = extractor.extract(artifact, chunks)
             entities.extend(result.entities)
             relationships.extend(result.relationships)

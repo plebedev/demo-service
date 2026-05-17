@@ -4,6 +4,9 @@
 reference implementation for career-context extraction, not a standalone app and
 not shared core infrastructure.
 
+`domain.yaml` is the domain manifest loaded by `register.py` for artifact type,
+view, unsupported-input, and extractor-routing metadata.
+
 ## Registered Inputs
 
 - `job_description`
@@ -14,6 +17,12 @@ not shared core infrastructure.
 - `personal_story`
 - `compensation_notes`
 - `follow_up_notes`
+
+The MVP registers all eight artifact types so they can be ingested and
+source-linked. Four artifact types currently have deterministic extractors:
+`job_description`, `resume`, `interview_notes`, and `personal_story`.
+`recruiter_message`, `company_research`, `compensation_notes`, and
+`follow_up_notes` are intentionally metadata/task-ready only in this milestone.
 
 ## Registered Extensions
 

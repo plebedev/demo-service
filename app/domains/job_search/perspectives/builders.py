@@ -33,7 +33,6 @@ def _evidence(signals: list[ContextSignal]) -> list[EvidenceLink]:
             links.append(
                 EvidenceLink(
                     source=source,
-                    confidence=0.72,
                     note=signal.label,
                 )
             )
@@ -76,9 +75,7 @@ def _task_section(
 def _manual_section(
     section_id: str, title: str, text: str, source: SourceLink | None
 ) -> ViewSection:
-    evidence = (
-        [EvidenceLink(source=source, confidence=0.65)] if source is not None else []
-    )
+    evidence = [EvidenceLink(source=source)] if source is not None else []
     return ViewSection(
         id=section_id, title=title, content=text, evidence_links=evidence
     )

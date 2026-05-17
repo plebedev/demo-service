@@ -19,3 +19,8 @@ contracts and persistence.
 The current Job Search MVP uses deterministic extractors so tests remain stable
 and costs stay at zero. A later bounded model step can be added behind the same
 extension interfaces without creating job-search-specific core code.
+
+Extractors may expose `artifact_type_ids` as an optional dispatch hint. When
+present, the service runs that extractor only for matching registered artifact
+types; otherwise the extractor remains self-contained and can decide whether to
+return output.

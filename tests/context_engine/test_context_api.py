@@ -2,6 +2,16 @@
 
 from __future__ import annotations
 
+import sqlalchemy as sa
+from sqlalchemy import select
+
+from app.models.context_engine import (
+    ContextActionableItemRecord,
+    ContextArtifactRecord,
+    ContextSignalRecord,
+    ContextSourceLinkRecord,
+)
+
 
 def create_code(client, code: str, label: str = "messy-notes") -> None:
     """Insert an invitation code through the admin API for test setup."""
@@ -41,7 +51,7 @@ def test_context_domain_api_loads_fake_domain_in_test(client) -> None:
     detail = client.get("/api/context/domains/test-domain", headers=headers)
     assert detail.status_code == 200
     detail_payload = detail.json()
-    assert detail_payload["perspectives"] == [{"id": "test-perspective-builder"}]
+    assert detail_payload["perspectives"] == [{"id": "test-summary"}]
     assert detail_payload["views"] == [
         {
             "id": "test-summary",
@@ -67,7 +77,7 @@ def test_context_view_api_builds_owner_scoped_perspective(client) -> None:
     assert created.status_code == 201
 
     response = client.get(
-        "/api/context/domains/test-domain/views/test-perspective-builder",
+        "/api/context/domains/test-domain/views/test-summary",
         headers=headers,
     )
 
@@ -151,6 +161,23 @@ def test_context_artifact_api_persists_generic_context_records(
     assert db_session.scalar(select(ContextSourceLinkRecord).limit(1)) is not None
 
 
+def test_context_persistence_schema_preserves_source_integrity(engine) -> None:
+    inspector = sa.inspect(engine)
+
+    chunk_constraints = {
+        constraint["name"]
+        for constraint in inspector.get_unique_constraints("context_artifact_chunks")
+    }
+    source_link_fks = inspector.get_foreign_keys("context_source_links")
+
+    assert "uq_context_artifact_chunks_artifact_index" in chunk_constraints
+    assert any(
+        fk["referred_table"] == "context_artifacts"
+        and fk["constrained_columns"] == ["artifact_id"]
+        for fk in source_link_fks
+    )
+
+
 def test_context_artifact_api_rejects_invalid_domain_and_type(client) -> None:
     headers = access_headers(client, "context-invalid")
 
@@ -167,13 +194,3 @@ def test_context_artifact_api_rejects_invalid_domain_and_type(client) -> None:
         json={"artifact_type_id": "missing-type", "text": "content"},
     )
     assert missing_type.status_code == 400
-
-
-from sqlalchemy import select
-
-from app.models.context_engine import (
-    ContextActionableItemRecord,
-    ContextArtifactRecord,
-    ContextSignalRecord,
-    ContextSourceLinkRecord,
-)

@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+from typing import Any
+
+import yaml  # type: ignore[import-untyped]
+
 from app.core.context_engine.interfaces import DomainPack, ViewDefinition
 from app.core.context_engine.models import ArtifactType
 from app.domains.job_search.extractors import (
@@ -10,7 +15,6 @@ from app.domains.job_search.extractors import (
     PersonalStoryExtractor,
     ResumeExtractor,
 )
-from app.domains.job_search.models import ARTIFACT_TYPE_IDS, DOMAIN_ID
 from app.domains.job_search.perspectives import (
     ApplicationPipelinePerspectiveBuilder,
     CompensationScopeRiskPerspectiveBuilder,
@@ -21,34 +25,43 @@ from app.domains.job_search.perspectives import (
 from app.domains.job_search.task_generators import JobSearchTaskGenerator
 
 
-ARTIFACT_DISPLAY_NAMES = {
-    "job_description": "Job Description",
-    "resume": "Resume",
-    "recruiter_message": "Recruiter Message",
-    "interview_notes": "Interview Notes",
-    "company_research": "Company Research",
-    "personal_story": "Personal Story",
-    "compensation_notes": "Compensation Notes",
-    "follow_up_notes": "Follow-Up Notes",
-}
+DOMAIN_MANIFEST_PATH = Path(__file__).with_name("domain.yaml")
+
+
+def _load_manifest() -> dict[str, Any]:
+    """Load the domain manifest used as registration metadata."""
+    with DOMAIN_MANIFEST_PATH.open(encoding="utf-8") as manifest_file:
+        payload = yaml.safe_load(manifest_file)
+    if not isinstance(payload, dict):
+        raise ValueError("Job Search domain manifest must be a mapping.")
+    return payload
 
 
 def build_job_search_domain_pack() -> DomainPack:
     """Build the first real Context Engine domain pack."""
+    manifest = _load_manifest()
+    artifact_type_entries = manifest.get("artifact_types", [])
+    if not isinstance(artifact_type_entries, list):
+        raise ValueError("Job Search domain manifest artifact_types must be a list.")
+    view_entries = manifest.get("views", [])
+    if not isinstance(view_entries, list):
+        raise ValueError("Job Search domain manifest views must be a list.")
+    accepted_mime_types = list(manifest.get("accepted_mime_types", []))
     return DomainPack(
-        id=DOMAIN_ID,
-        display_name="Job Search / Career Context",
+        id=str(manifest["id"]),
+        display_name=str(manifest["display_name"]),
         artifact_types=[
             ArtifactType(
-                id=artifact_type_id,
-                display_name=ARTIFACT_DISPLAY_NAMES[artifact_type_id],
+                id=str(entry["id"]),
+                display_name=str(entry["display_name"]),
                 description=(
                     "Career-context source material registered by the job_search "
                     "domain pack."
                 ),
-                accepted_mime_types=["text/plain", "application/pdf"],
+                accepted_mime_types=accepted_mime_types,
+                metadata={"extractor_ids": list(entry.get("extractor_ids", []))},
             )
-            for artifact_type_id in ARTIFACT_TYPE_IDS
+            for entry in artifact_type_entries
         ],
         extractors=[
             JobDescriptionExtractor(),
@@ -66,35 +79,22 @@ def build_job_search_domain_pack() -> DomainPack:
         task_generators=[JobSearchTaskGenerator()],
         view_definitions=[
             ViewDefinition(
-                id="role_fit",
-                display_name="Role Fit",
-                description="Source-grounded fit, evidence gaps, risks, and positioning.",
-            ),
-            ViewDefinition(
-                id="interview_prep",
-                display_name="Interview Prep",
-                description="Interview themes, supporting stories, topics, and concerns.",
-            ),
-            ViewDefinition(
-                id="resume_positioning",
-                display_name="Resume Positioning",
-                description="Resume evidence and rewrite suggestions.",
-            ),
-            ViewDefinition(
-                id="application_pipeline",
-                display_name="Application Pipeline",
-                description="Opportunities, next actions, blockers, and follow-ups.",
-            ),
-            ViewDefinition(
-                id="compensation_scope_risk",
-                display_name="Compensation and Scope Risk",
-                description="Compensation signals, scope risk, and judgment areas.",
-            ),
+                id=str(entry["id"]),
+                display_name=str(entry["display_name"]),
+                description=(
+                    str(entry["description"]) if entry.get("description") else None
+                ),
+            )
+            for entry in view_entries
         ],
         metadata={
-            "domain_pack": "job_search",
-            "status": "mvp",
-            "source_grounded": True,
-            "unsupported_inputs": ["images", "OCR", "audio", "video", "web lookup"],
+            "domain_pack": str(manifest["id"]),
+            "status": str(manifest.get("status", "mvp")),
+            "source_grounded": bool(manifest.get("source_grounded", True)),
+            "unsupported_inputs": list(manifest.get("unsupported_inputs", [])),
+            "extractor_routing": {
+                str(entry["id"]): list(entry.get("extractor_ids", []))
+                for entry in artifact_type_entries
+            },
         },
     )

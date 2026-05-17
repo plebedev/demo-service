@@ -21,7 +21,11 @@ from app.core.context_engine.models import (
 
 @runtime_checkable
 class Extractor(Protocol):
-    """Domain extension that derives generic context from artifact chunks."""
+    """Domain extension that derives generic context from artifact chunks.
+
+    Implementations may expose ``artifact_type_ids`` as an iterable of registered
+    artifact type ids. The service uses it as an optional dispatch hint.
+    """
 
     @property
     def id(self) -> str:

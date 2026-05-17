@@ -17,6 +17,24 @@ from app.core.context_engine.models import (
 )
 
 
+def _artifact_for_required_source_link(
+    artifacts: dict[str, Artifact],
+    source_links: list[SourceLink],
+    record_type: str,
+    record_id: str,
+) -> Artifact:
+    """Return the artifact for a required source link or raise clearly."""
+    if not source_links:
+        raise ValueError(f"{record_type} '{record_id}' must include source links.")
+    artifact = artifacts.get(source_links[0].artifact_id)
+    if artifact is None:
+        raise ValueError(
+            f"{record_type} '{record_id}' references unknown artifact "
+            f"'{source_links[0].artifact_id}'."
+        )
+    return artifact
+
+
 class ContextRepository(Protocol):
     """Repository contract for Context Engine persistence."""
 
@@ -46,10 +64,6 @@ class ContextRepository(Protocol):
         self, items: list[ActionableItem]
     ) -> list[ActionableItem]:
         """Persist actionable items."""
-        ...
-
-    def store_source_links(self, links: list[SourceLink]) -> list[SourceLink]:
-        """Persist source links for provenance queries or audits."""
         ...
 
     def index_artifact_outputs(
@@ -127,7 +141,6 @@ class InMemoryContextRepository:
         self.relationships: dict[str, ContextRelationship] = {}
         self.signals: dict[str, ContextSignal] = {}
         self.actionable_items: dict[str, ActionableItem] = {}
-        self.source_links: list[SourceLink] = []
         self._artifact_index: dict[tuple[str, OwnerType, str], list[str]] = defaultdict(
             list
         )
@@ -155,19 +168,17 @@ class InMemoryContextRepository:
         """Store chunks in memory."""
         for chunk in chunks:
             self.chunks[chunk.id] = chunk
-            self.store_source_links([chunk.source_link])
         return chunks
 
     def store_entities(self, entities: list[ContextEntity]) -> list[ContextEntity]:
         """Store entities in memory."""
         for entity in entities:
+            artifact = _artifact_for_required_source_link(
+                self.artifacts, entity.source_links, "ContextEntity", entity.id
+            )
             self.entities[entity.id] = entity
-            for source_link in entity.source_links:
-                artifact = self.artifacts.get(source_link.artifact_id)
-                if artifact is not None:
-                    key = (artifact.domain_id, artifact.owner_type, artifact.owner_id)
-                    self._entity_index[key].append(entity.id)
-            self.store_source_links(entity.source_links)
+            key = (artifact.domain_id, artifact.owner_type, artifact.owner_id)
+            self._entity_index[key].append(entity.id)
         return entities
 
     def store_relationships(
@@ -175,20 +186,24 @@ class InMemoryContextRepository:
     ) -> list[ContextRelationship]:
         """Store relationships in memory."""
         for relationship in relationships:
+            artifact = _artifact_for_required_source_link(
+                self.artifacts,
+                relationship.source_links,
+                "ContextRelationship",
+                relationship.id,
+            )
             self.relationships[relationship.id] = relationship
-            for source_link in relationship.source_links:
-                artifact = self.artifacts.get(source_link.artifact_id)
-                if artifact is not None:
-                    key = (artifact.domain_id, artifact.owner_type, artifact.owner_id)
-                    self._relationship_index[key].append(relationship.id)
-            self.store_source_links(relationship.source_links)
+            key = (artifact.domain_id, artifact.owner_type, artifact.owner_id)
+            self._relationship_index[key].append(relationship.id)
         return relationships
 
     def store_signals(self, signals: list[ContextSignal]) -> list[ContextSignal]:
         """Store signals in memory."""
         for signal in signals:
+            _artifact_for_required_source_link(
+                self.artifacts, signal.source_links, "ContextSignal", signal.id
+            )
             self.signals[signal.id] = signal
-            self.store_source_links(signal.source_links)
         return signals
 
     def store_actionable_items(
@@ -196,14 +211,11 @@ class InMemoryContextRepository:
     ) -> list[ActionableItem]:
         """Store actionable items in memory."""
         for item in items:
+            _artifact_for_required_source_link(
+                self.artifacts, item.source_links, "ActionableItem", item.id
+            )
             self.actionable_items[item.id] = item
-            self.store_source_links(item.source_links)
         return items
-
-    def store_source_links(self, links: list[SourceLink]) -> list[SourceLink]:
-        """Store source links in memory."""
-        self.source_links.extend(links)
-        return links
 
     def index_artifact_outputs(
         self,

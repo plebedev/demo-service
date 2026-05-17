@@ -14,6 +14,7 @@ class PersonalStoryExtractor:
     """Extract structured story evidence from personal career stories."""
 
     id: str = "personal-story-extractor"
+    artifact_type_ids: tuple[str, ...] = ("personal_story",)
 
     def extract(
         self,

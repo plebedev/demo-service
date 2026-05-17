@@ -14,6 +14,7 @@ class InterviewNotesExtractor:
     """Extract concerns, themes, risks, and follow-ups from interview notes."""
 
     id: str = "interview-notes-extractor"
+    artifact_type_ids: tuple[str, ...] = ("interview_notes",)
 
     def extract(
         self,
