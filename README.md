@@ -113,7 +113,7 @@ app/
         `-- context.py
 ```
 
-The fake `app/domains/test_domain/` pack exists only to validate extension loading, extractor execution, view registration, and task generation. It is loaded by the app factory only when `ENVIRONMENT=test`.
+The fake `app/domains/test_domain/` pack exists only to validate extension loading, extractor execution, view registration, and task generation. It is loaded by the app factory only when `ENVIRONMENT=test`. Local and deployed environments may legitimately start with an empty Context Engine registry until real domain packs are registered.
 
 The current storage adapter is process-local and in-memory. Durable storage should be introduced behind `ContextRepository` rather than by coupling Context Engine orchestration directly to SQLAlchemy. If schema changes are added later, use Alembic and keep Oracle Autonomous Database compatibility first. Do not introduce a graph database or separate vector database yet.
 

@@ -13,11 +13,36 @@ from app.core.context_engine.models import (
     ContextEntity,
     ContextSignal,
     ExtractionResult,
+    IngestionRequest,
+    OwnerType,
     PerspectiveView,
     ReadinessStatus,
     SourceLink,
     ViewSection,
 )
+
+
+@dataclass(frozen=True)
+class TestArtifactIngestor:
+    """Ingestor that normalizes a generic test payload."""
+
+    id: str = "test-artifact-ingestor"
+
+    def ingest(self, payload: dict[str, object]) -> IngestionRequest:
+        """Normalize a raw payload into an ingestion request."""
+        return IngestionRequest(
+            domain_id="test-domain",
+            artifact_type_id=str(payload.get("artifact_type_id", "note")),
+            owner_type=OwnerType.INVITATION_CODE,
+            owner_id=str(payload["owner_id"]),
+            title=str(payload["title"]) if payload.get("title") is not None else None,
+            text=str(payload.get("text", "")).strip(),
+            source_uri=(
+                str(payload["source_uri"])
+                if payload.get("source_uri") is not None
+                else None
+            ),
+        )
 
 
 @dataclass(frozen=True)
@@ -117,6 +142,7 @@ def build_test_domain_pack() -> DomainPack:
         extractors=[TestDomainExtractor()],
         perspective_builders=[TestPerspectiveBuilder()],
         task_generators=[TestTaskGenerator()],
+        ingestors=[TestArtifactIngestor()],
         view_definitions=[
             ViewDefinition(
                 id="test-summary",

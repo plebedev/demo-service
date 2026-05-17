@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
 from pydantic import BaseModel, Field
@@ -100,18 +101,17 @@ class ViewDefinition(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
-class DomainPack(BaseModel):
+@dataclass(frozen=True)
+class DomainPack:
     """Registered bundle of domain-specific Context Engine extensions."""
 
     id: str
     display_name: str
-    artifact_types: list[ArtifactType] = Field(default_factory=list)
-    extractors: list[Extractor] = Field(default_factory=list)
-    perspective_builders: list[PerspectiveBuilder] = Field(default_factory=list)
-    task_generators: list[TaskGenerator] = Field(default_factory=list)
-    view_definitions: list[ViewDefinition] = Field(default_factory=list)
+    artifact_types: list[ArtifactType] = field(default_factory=list)
+    extractors: list[Extractor] = field(default_factory=list)
+    perspective_builders: list[PerspectiveBuilder] = field(default_factory=list)
+    task_generators: list[TaskGenerator] = field(default_factory=list)
+    view_definitions: list[ViewDefinition] = field(default_factory=list)
     chunker: ArtifactChunker | None = None
-    ingestors: list[ArtifactIngestor] = Field(default_factory=list)
-    metadata: dict[str, Any] = Field(default_factory=dict)
-
-    model_config = {"arbitrary_types_allowed": True}
+    ingestors: list[ArtifactIngestor] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)

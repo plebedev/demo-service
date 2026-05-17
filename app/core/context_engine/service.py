@@ -22,8 +22,31 @@ class ContextEngineService:
         self.repository = repository
         self.default_chunker = default_chunker or SimpleTextChunker()
 
+    def ingest_payload(
+        self, domain_id: str, ingestor_id: str, payload: dict[str, object]
+    ) -> IngestionResult:
+        """Normalize a raw payload with a registered ingestor, then ingest it."""
+        domain = self.registry.get_domain(domain_id)
+        for ingestor in domain.ingestors:
+            if ingestor.id == ingestor_id:
+                request = ingestor.ingest(payload)
+                if request.domain_id != domain_id:
+                    raise ValueError(
+                        "Artifact ingestor returned a mismatched domain id."
+                    )
+                return self.ingest_artifact(request)
+        raise ValueError(
+            f"Artifact ingestor '{ingestor_id}' is not registered for domain "
+            f"'{domain_id}'."
+        )
+
     def ingest_artifact(self, request: IngestionRequest) -> IngestionResult:
-        """Ingest one artifact through registered domain extensions."""
+        """Ingest one normalized artifact through registered domain extensions.
+
+        Registered ArtifactIngestors normalize external payloads before this method.
+        PerspectiveBuilders are intentionally not invoked here; views are materialized
+        on demand so ingestion stays focused on durable source facts and signals.
+        """
         domain = self.registry.get_domain(request.domain_id)
         valid_artifact_type_ids = {
             artifact_type.id for artifact_type in domain.artifact_types
@@ -72,14 +95,11 @@ class ContextEngineService:
         relationships = self.repository.store_relationships(relationships)
         signals = self.repository.store_signals(signals)
         actionable_items = self.repository.store_actionable_items(actionable_items)
-
-        index_outputs = getattr(self.repository, "index_artifact_outputs", None)
-        if callable(index_outputs):
-            index_outputs(
-                artifact=artifact,
-                signals=signals,
-                actionable_items=actionable_items,
-            )
+        self.repository.index_artifact_outputs(
+            artifact=artifact,
+            signals=signals,
+            actionable_items=actionable_items,
+        )
 
         return IngestionResult(
             artifact=artifact,

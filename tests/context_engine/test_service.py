@@ -106,3 +106,34 @@ def test_fake_domain_perspective_builder_and_task_generator_work() -> None:
     assert view.view_definition_id == "test-summary"
     assert view.sections[0].content == "Perspective content"
     assert result.actionable_items[-1].item_type == "test_generated_task"
+
+
+def test_registered_artifact_ingestor_normalizes_payload_before_ingestion() -> None:
+    service = build_service()
+
+    result = service.ingest_payload(
+        "test-domain",
+        "test-artifact-ingestor",
+        {
+            "owner_id": "42",
+            "title": "Payload note",
+            "text": "  payload content  ",
+            "source_uri": "memory://payload-note",
+        },
+    )
+
+    assert result.artifact.title == "Payload note"
+    assert result.artifact.text == "payload content"
+    assert result.artifact.owner_type == OwnerType.INVITATION_CODE
+    assert result.artifact.owner_id == "42"
+
+
+def test_unregistered_artifact_ingestor_is_rejected() -> None:
+    service = build_service()
+
+    with pytest.raises(ValueError, match="not registered"):
+        service.ingest_payload(
+            "test-domain",
+            "missing-ingestor",
+            {"owner_id": "42", "text": "payload content"},
+        )

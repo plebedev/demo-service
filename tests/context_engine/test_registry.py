@@ -19,6 +19,7 @@ def test_domain_registration_lists_extensions() -> None:
     assert [item.id for item in registry.list_artifact_types("test-domain")] == ["note"]
     assert registry.list_perspectives("test-domain") == ["test-perspective-builder"]
     assert [view.id for view in registry.list_views("test-domain")] == ["test-summary"]
+    assert [ingestor.id for ingestor in pack.ingestors] == ["test-artifact-ingestor"]
 
 
 def test_domain_registration_rejects_duplicate_domain() -> None:

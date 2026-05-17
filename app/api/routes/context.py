@@ -20,6 +20,8 @@ from app.schemas.context import (
     DomainDetailResponse,
     DomainListResponse,
     DomainSummaryResponse,
+    ExtensionSummaryResponse,
+    ViewDefinitionResponse,
 )
 
 router = APIRouter(prefix="/api/context", tags=["context"])
@@ -77,8 +79,19 @@ def get_context_domain(
         display_name=domain.display_name,
         metadata=domain.metadata,
         artifact_types=registry.list_artifact_types(domain_id),
-        perspectives=registry.list_perspectives(domain_id),
-        views=[view.id for view in registry.list_views(domain_id)],
+        perspectives=[
+            ExtensionSummaryResponse(id=perspective_id)
+            for perspective_id in registry.list_perspectives(domain_id)
+        ],
+        views=[
+            ViewDefinitionResponse(
+                id=view.id,
+                display_name=view.display_name,
+                description=view.description,
+                metadata=view.metadata,
+            )
+            for view in registry.list_views(domain_id)
+        ],
     )
 
 

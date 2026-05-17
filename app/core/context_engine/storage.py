@@ -47,6 +47,16 @@ class ContextRepository(Protocol):
         """Persist actionable items."""
         ...
 
+    def index_artifact_outputs(
+        self,
+        *,
+        artifact: Artifact,
+        signals: list[ContextSignal],
+        actionable_items: list[ActionableItem],
+    ) -> None:
+        """Index or associate outputs with their source artifact owner."""
+        ...
+
     def list_signals(
         self,
         *,

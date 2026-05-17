@@ -17,6 +17,21 @@ from app.core.context_engine.models import (
 )
 
 
+class ExtensionSummaryResponse(BaseModel):
+    """Public metadata for a registered runtime extension."""
+
+    id: str
+
+
+class ViewDefinitionResponse(BaseModel):
+    """Public metadata for a registered view definition."""
+
+    id: str
+    display_name: str
+    description: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
 class DomainSummaryResponse(BaseModel):
     """Public summary of a registered domain pack."""
 
@@ -29,8 +44,8 @@ class DomainDetailResponse(DomainSummaryResponse):
     """Public details for a registered domain pack."""
 
     artifact_types: list[ArtifactType]
-    perspectives: list[str]
-    views: list[str]
+    perspectives: list[ExtensionSummaryResponse]
+    views: list[ViewDefinitionResponse]
 
 
 class DomainListResponse(BaseModel):

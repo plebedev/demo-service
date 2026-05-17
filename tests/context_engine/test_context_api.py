@@ -43,6 +43,19 @@ def test_context_domain_api_loads_fake_domain_in_test(client) -> None:
         }
     ]
 
+    detail = client.get("/api/context/domains/test-domain", headers=headers)
+    assert detail.status_code == 200
+    detail_payload = detail.json()
+    assert detail_payload["perspectives"] == [{"id": "test-perspective-builder"}]
+    assert detail_payload["views"] == [
+        {
+            "id": "test-summary",
+            "display_name": "Test Summary",
+            "description": "Minimal registered view for tests.",
+            "metadata": {},
+        }
+    ]
+
 
 def test_context_artifact_api_ingests_and_scopes_outputs(client) -> None:
     owner_headers = access_headers(client, "context-owner")
