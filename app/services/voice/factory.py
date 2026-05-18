@@ -8,7 +8,7 @@ from app.services.voice.base_client import VoiceClient
 # One realtime audio model per provider — not user-configurable.
 _PROVIDER_MODELS: dict[str, str] = {
     "xai": "grok-voice-think-fast-1.0",
-    "openai": "gpt-realtime-1.5",
+    "openai": "gpt-realtime-2",
 }
 
 

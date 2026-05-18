@@ -27,5 +27,16 @@ human review, while human clarification, decision, source-material, review, and
 blocked items remain explicitly human-owned. Every item must preserve the source
 links that explain why it was generated.
 
+The frontend groups items by readiness before rendering individual cards. Each
+card should answer:
+
+- what work is being recommended
+- why the item exists
+- which evidence supports it
+- whether it is human-owned or potentially agent-suitable after review
+
+This grouping is intentionally UI-level. The backend continues to expose generic
+`ActionableItem` records, not experience-specific lanes or execution queues.
+
 Actionable items are recommendations only in this milestone. No autonomous
 execution agents are invoked.

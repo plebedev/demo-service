@@ -24,5 +24,15 @@ Rule-based extractors do not emit numeric confidence values. They preserve the
 evidence kind instead, because the current pipeline has no calibrated scoring
 model.
 
+The workbench uses provenance as a trust layer, not the primary reading order.
+Users see synthesized conclusions first, then grouped top evidence, then an
+expandable trail for additional source links. Repeated snippets may be grouped
+in the UI, but the underlying `SourceLink` records remain available through the
+artifact APIs.
+
+Confidence labels in the UI are deliberately coarse. They communicate evidence
+depth and explicit-vs-inferred status as `High confidence`, `Medium confidence`,
+or `Low confidence`; they are not numeric model scores.
+
 The MVP does not claim unsupported knowledge. If no source exists for a view
 section or task, the UI and API should represent that absence directly.
