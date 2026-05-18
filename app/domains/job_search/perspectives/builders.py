@@ -40,7 +40,6 @@ def _evidence(signals: list[ContextSignal]) -> list[EvidenceLink]:
                 EvidenceLink(
                     source=source,
                     note=f"{signal.label} ({evidence_kind})",
-                    confidence=0.72 if evidence_kind == "inferred" else 0.95,
                 )
             )
     return links

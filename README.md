@@ -193,8 +193,8 @@ POST /api/context/domains/{domain_id}/artifact-uploads
 GET  /api/context/domains/{domain_id}/artifacts
 GET  /api/context/domains/{domain_id}/artifacts/{artifact_id}
 GET  /api/context/domains/{domain_id}/signals
-GET  /api/context/domains/{domain_id}/tasks
 GET  /api/context/domains/{domain_id}/actionable-items
+GET  /api/context/domains/{domain_id}/tasks  # deprecated compatibility alias
 GET  /api/context/domains/{domain_id}/views/{view_definition_id}
 ```
 

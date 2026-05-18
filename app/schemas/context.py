@@ -102,6 +102,12 @@ class ActionableItemListResponse(BaseModel):
     tasks: list[ActionableItem]
 
 
+class ActionableItemCollectionResponse(BaseModel):
+    """Owner-scoped actionable-item collection."""
+
+    actionable_items: list[ActionableItem]
+
+
 class PerspectiveViewResponse(BaseModel):
     """Owner-scoped materialized perspective view."""
 

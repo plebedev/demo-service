@@ -192,7 +192,7 @@ def test_resume_interview_and_story_extractors_feed_perspectives() -> None:
         "Open Questions",
     ]
     assert role_fit.sections[0].evidence_links
-    assert role_fit.sections[0].evidence_links[0].confidence == 0.95
+    assert role_fit.sections[0].evidence_links[0].confidence is None
     assert interview.sections[1].title == "Best Supporting Stories"
     assert "reduced incidents" in (interview.sections[1].content or "")
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from io import BytesIO
 from typing import cast
 
@@ -18,12 +19,13 @@ from fastapi import (
 from pypdf import PdfReader
 
 from app.api.deps import get_current_access_token
-from app.core.context_engine.models import IngestionRequest, OwnerType
+from app.core.context_engine.models import ActionableItem, IngestionRequest, OwnerType
 from app.core.context_engine.registry import DomainRegistry
 from app.core.context_engine.service import ContextEngineService
 from app.core.context_engine.storage import ContextRepository
 from app.core.security import AccessTokenClaims
 from app.schemas.context import (
+    ActionableItemCollectionResponse,
     ActionableItemListResponse,
     ContextArtifactCreateRequest,
     ContextArtifactDetailResponse,
@@ -62,6 +64,28 @@ def get_context_engine(request: Request) -> ContextEngineService:
 def get_context_repository(request: Request) -> ContextRepository:
     """Return the app-scoped Context Engine repository."""
     return cast(ContextRepository, request.app.state.context_repository)
+
+
+def _owner_actionable_items(
+    *,
+    domain_id: str,
+    claims: AccessTokenClaims,
+    registry: DomainRegistry,
+    repository: ContextRepository,
+) -> list[ActionableItem]:
+    """Return caller-owned actionable items after validating the domain."""
+    try:
+        registry.get_domain(domain_id)
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Context domain not found.",
+        ) from exc
+    return repository.list_actionable_items(
+        domain_id=domain_id,
+        owner_type=OwnerType.INVITATION_CODE,
+        owner_id=str(claims.invitation_code_id),
+    )
 
 
 async def _extract_upload_text(file: UploadFile) -> tuple[str, str | None]:
@@ -223,8 +247,6 @@ async def upload_context_artifact(
     service: ContextEngineService = Depends(get_context_engine),
 ) -> ContextArtifactIngestResponse:
     """Upload and ingest one text or extractable PDF artifact."""
-    import json
-
     text, content_type = await _extract_upload_text(file)
     metadata = {}
     if metadata_json:
@@ -368,7 +390,11 @@ def list_context_signals(
     )
 
 
-@router.get("/domains/{domain_id}/tasks", response_model=ActionableItemListResponse)
+@router.get(
+    "/domains/{domain_id}/tasks",
+    response_model=ActionableItemListResponse,
+    deprecated=True,
+)
 def list_context_tasks(
     domain_id: str,
     claims: AccessTokenClaims = Depends(get_current_access_token),
@@ -376,38 +402,34 @@ def list_context_tasks(
     repository: ContextRepository = Depends(get_context_repository),
 ) -> ActionableItemListResponse:
     """Return caller-owned actionable items for a Context Engine domain."""
-    try:
-        registry.get_domain(domain_id)
-    except KeyError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Context domain not found.",
-        ) from exc
     return ActionableItemListResponse(
-        tasks=repository.list_actionable_items(
+        tasks=_owner_actionable_items(
             domain_id=domain_id,
-            owner_type=OwnerType.INVITATION_CODE,
-            owner_id=str(claims.invitation_code_id),
+            claims=claims,
+            registry=registry,
+            repository=repository,
         )
     )
 
 
 @router.get(
     "/domains/{domain_id}/actionable-items",
-    response_model=ActionableItemListResponse,
+    response_model=ActionableItemCollectionResponse,
 )
 def list_context_actionable_items(
     domain_id: str,
     claims: AccessTokenClaims = Depends(get_current_access_token),
     registry: DomainRegistry = Depends(get_context_registry),
     repository: ContextRepository = Depends(get_context_repository),
-) -> ActionableItemListResponse:
+) -> ActionableItemCollectionResponse:
     """Return caller-owned actionable items for a Context Engine domain."""
-    return list_context_tasks(
-        domain_id=domain_id,
-        claims=claims,
-        registry=registry,
-        repository=repository,
+    return ActionableItemCollectionResponse(
+        actionable_items=_owner_actionable_items(
+            domain_id=domain_id,
+            claims=claims,
+            registry=registry,
+            repository=repository,
+        ),
     )
 
 

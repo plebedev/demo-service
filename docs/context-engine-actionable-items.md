@@ -17,8 +17,8 @@ Readiness statuses used by the Job Search domain pack include:
 The protected owner-scoped API endpoint is:
 
 ```text
-GET /api/context/domains/{domain_id}/tasks
 GET /api/context/domains/{domain_id}/actionable-items
+GET /api/context/domains/{domain_id}/tasks  # deprecated compatibility alias
 ```
 
 The workbench renders readiness as an operational triage signal:

@@ -202,7 +202,9 @@ def test_context_artifact_api_ingests_and_scopes_outputs(client) -> None:
         headers=owner_headers,
     )
     assert owner_actionable_items.status_code == 200
-    assert owner_actionable_items.json() == owner_tasks.json()
+    assert (
+        owner_actionable_items.json()["actionable_items"] == owner_tasks.json()["tasks"]
+    )
 
     other_signals = client.get(
         "/api/context/domains/test-domain/signals",
