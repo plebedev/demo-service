@@ -4,6 +4,7 @@ from fastapi import FastAPI
 
 from app.api.router import api_router
 from app.core.config import get_settings
+from app.core.context_engine.factory import attach_context_engine
 from app.core.logging import configure_logging
 from app.workflows.loader import attach_workflow_registry
 
@@ -19,6 +20,7 @@ def create_app() -> FastAPI:
         docs_url="/docs",
         redoc_url="/redoc",
     )
+    attach_context_engine(app, settings)
     attach_workflow_registry(app, settings)
     app.include_router(api_router)
     return app

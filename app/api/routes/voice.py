@@ -70,7 +70,18 @@ _voice_tool_registry: ToolRegistry = build_tool_registry().scoped(VOICE_TOOL_NAM
 # Hardcoded provider/voice catalogue — matches factory._PROVIDER_MODELS keys.
 _PROVIDER_VOICES: dict[str, list[str]] = {
     "xai": ["eve", "ara", "rex", "sal", "leo"],
-    "openai": ["alloy", "echo", "fable", "onyx", "nova", "shimmer"],
+    "openai": [
+        "marin",
+        "cedar",
+        "alloy",
+        "ash",
+        "ballad",
+        "coral",
+        "echo",
+        "sage",
+        "shimmer",
+        "verse",
+    ],
 }
 _PROVIDER_NAMES: dict[str, str] = {"xai": "xAI", "openai": "OpenAI"}
 
@@ -453,13 +464,13 @@ async def _handle_twilio_messages(
                 .filter(VoiceExperienceConfig.experience_id == ExperienceId.VOICE_DEMO)
                 .first()
             )
-            voice = voice_cfg.voice_name if voice_cfg else "eve"
             # Resolve the effective provider so it can be stored in history.
             resolved_provider = (
                 voice_cfg.voice_provider
                 if voice_cfg and voice_cfg.voice_provider
                 else settings.voice_provider
             )
+            voice = _resolve_voice_name(voice_cfg, resolved_provider)
             tool_config = _load_tool_config(persona)
             create_session(
                 session_id=call_sid,
@@ -475,7 +486,7 @@ async def _handle_twilio_messages(
                 voice=voice,
             )
             tool_prompt = _voice_tool_registry.prompt_block() or ""
-            instructions = f"{persona.instructions}\n\n{tool_prompt}"
+            instructions = _build_stream_instructions(persona, tool_prompt)
             await vc.configure_session(
                 instructions=instructions,
                 tools=_voice_tool_registry.tool_definitions(),
@@ -663,6 +674,30 @@ async def _ws_iter(ws: WebSocket):  # type: ignore[no-untyped-def]
             yield await ws.receive_text()
         except WebSocketDisconnect:
             return
+
+
+def _build_stream_instructions(
+    persona: VoicePersona,
+    tool_prompt: str,
+) -> str:
+    """Build realtime instructions from persona guidance and tool rules."""
+    parts = [persona.instructions]
+    if tool_prompt:
+        parts.append(tool_prompt)
+    return "\n\n".join(parts)
+
+
+def _resolve_voice_name(
+    voice_cfg: VoiceExperienceConfig | None,
+    provider: str,
+) -> str:
+    """Return a provider-compatible voice, tolerating stale cross-provider config."""
+    provider_key = provider.lower()
+    voices = _PROVIDER_VOICES.get(provider_key) or _PROVIDER_VOICES["xai"]
+    configured_voice = voice_cfg.voice_name if voice_cfg is not None else None
+    if configured_voice in voices:
+        return configured_voice
+    return voices[0]
 
 
 # ---------------------------------------------------------------------------

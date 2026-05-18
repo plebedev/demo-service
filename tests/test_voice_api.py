@@ -213,11 +213,15 @@ def test_list_voice_providers_returns_all_providers(client: TestClient) -> None:
     assert openai["provider_name"] == "OpenAI"
     assert set(openai["voices"]) == {
         "alloy",
+        "ash",
+        "ballad",
+        "cedar",
+        "coral",
         "echo",
-        "fable",
-        "onyx",
-        "nova",
+        "marin",
+        "sage",
         "shimmer",
+        "verse",
     }
 
 
@@ -559,6 +563,158 @@ def test_voice_registry_scope_excludes_workflow_tools() -> None:
     assert {entry.name for entry in registry.resolve()} == set(VOICE_TOOL_NAMES)
     with pytest.raises(KeyError, match="Unknown tool"):
         registry.get("normalize_input")
+
+
+def test_openai_voice_client_uses_ga_realtime_session_shape() -> None:
+    """OpenAI session.update uses the GA nested audio schema."""
+    from app.services.voice.openai_client import OpenAiVoiceClient
+
+    client = OpenAiVoiceClient(api_key="test-key", model="gpt-realtime-2")
+    sent: list[dict] = []  # type: ignore[type-arg]
+
+    async def fake_send(message: dict) -> None:  # type: ignore[type-arg]
+        sent.append(message)
+
+    client._send = fake_send  # type: ignore[method-assign]
+
+    import asyncio
+
+    asyncio.run(
+        client.configure_session(
+            instructions="Say hello.",
+            tools=[{"type": "function", "name": "record_answer"}],
+            voice="marin",
+            audio_format={"type": "audio/pcmu", "rate": 8000},
+        )
+    )
+
+    assert sent == [
+        {
+            "type": "session.update",
+            "session": {
+                "type": "realtime",
+                "model": "gpt-realtime-2",
+                "instructions": (
+                    "Say hello.\n\nRespond only in English unless the user "
+                    "explicitly asks for another language."
+                ),
+                "output_modalities": ["audio"],
+                "tools": [{"type": "function", "name": "record_answer"}],
+                "audio": {
+                    "input": {
+                        "format": {"type": "audio/pcm", "rate": 24000},
+                        "transcription": {
+                            "model": "gpt-4o-mini-transcribe",
+                            "language": "en",
+                        },
+                        "turn_detection": {
+                            "type": "server_vad",
+                            "threshold": 0.85,
+                            "silence_duration_ms": 0,
+                        },
+                    },
+                    "output": {
+                        "format": {"type": "audio/pcm", "rate": 24000},
+                        "voice": "marin",
+                    },
+                },
+            },
+        }
+    ]
+    assert "input_audio_format" not in sent[0]["session"]
+    assert "output_audio_format" not in sent[0]["session"]
+    assert "input_audio_transcription" not in sent[0]["session"]
+
+
+def test_openai_voice_client_transcodes_bridge_audio() -> None:
+    """OpenAI receives PCM16/24k while the app bridge keeps μ-law/8k."""
+    import base64
+    import struct
+
+    from app.services.voice.openai_client import (
+        _decode_mulaw_sample,
+        _encode_mulaw_sample,
+        _mulaw_8khz_b64_to_pcm16_24khz_b64,
+        _pcm16_24khz_b64_to_mulaw_8khz_b64,
+    )
+
+    mulaw_10ms = bytes([_encode_mulaw_sample(0)] * 80)
+    pcm_b64 = _mulaw_8khz_b64_to_pcm16_24khz_b64(
+        base64.b64encode(mulaw_10ms).decode("ascii")
+    )
+    pcm = base64.b64decode(pcm_b64)
+    assert len(pcm) == 480  # 80 samples at 8 kHz -> 240 samples at 24 kHz PCM16
+    assert struct.unpack("<h", pcm[:2])[0] == _decode_mulaw_sample(mulaw_10ms[0])
+
+    bridge_b64 = _pcm16_24khz_b64_to_mulaw_8khz_b64(pcm_b64)
+    bridge_audio = base64.b64decode(bridge_b64)
+    assert len(bridge_audio) == 80
+    assert set(bridge_audio) == {mulaw_10ms[0]}
+
+
+def test_openai_voice_client_connect_does_not_send_beta_header(monkeypatch) -> None:
+    """OpenAI Realtime GA connection should not opt into the retired beta shape."""
+    from app.services.voice.openai_client import OpenAiVoiceClient
+
+    captured: dict[str, object] = {}
+
+    async def fake_connect(url: str, additional_headers: dict[str, str]):
+        captured["url"] = url
+        captured["headers"] = additional_headers
+        return object()
+
+    monkeypatch.setattr(
+        "websockets.asyncio.client.connect",
+        fake_connect,
+    )
+
+    import asyncio
+
+    client = OpenAiVoiceClient(api_key="test-key", model="gpt-realtime-2")
+    asyncio.run(client._connect())
+
+    assert captured["url"] == "wss://api.openai.com/v1/realtime?model=gpt-realtime-2"
+    assert captured["headers"] == {"Authorization": "Bearer test-key"}
+
+
+def test_stream_instructions_ignore_synthesized_greeting() -> None:
+    """The realtime opening turn is controlled by persona instructions."""
+    from app.api.routes.voice import _build_stream_instructions
+
+    persona = VoicePersona(
+        experience_id="voice-demo",
+        name="Advisor",
+        name_key="advisor",
+        instructions="Ask careful intake questions.",
+    )
+    cfg = VoiceExperienceConfig(
+        experience_id="voice-demo",
+        voice_name="marin",
+        synthesized_greeting="Hi, I am ready to help with workforce planning.",
+    )
+
+    instructions = _build_stream_instructions(
+        persona,
+        "Tool instructions:\n- record_answer: Record answers.",
+    )
+
+    assert instructions.startswith("Ask careful intake questions.")
+    assert cfg.synthesized_greeting not in instructions
+    assert "Tool instructions:" in instructions
+
+
+def test_resolve_voice_name_falls_back_for_stale_provider_config() -> None:
+    """Provider switches should not pass an xAI voice into OpenAI Realtime."""
+    from app.api.routes.voice import _resolve_voice_name
+
+    cfg = VoiceExperienceConfig(
+        experience_id="voice-demo",
+        voice_name="eve",
+        voice_provider="openai",
+    )
+
+    assert _resolve_voice_name(cfg, "openai") == "marin"
+    assert _resolve_voice_name(cfg, "xai") == "eve"
 
 
 # ---------------------------------------------------------------------------

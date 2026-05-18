@@ -115,6 +115,13 @@ def reset_database(
             text(
                 """
                 TRUNCATE TABLE
+                    context_source_links,
+                    context_actionable_items,
+                    context_signals,
+                    context_relationships,
+                    context_entities,
+                    context_artifact_chunks,
+                    context_artifacts,
                     rag_document_chunks,
                     rag_message_citations,
                     rag_messages,

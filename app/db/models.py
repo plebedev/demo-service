@@ -1,6 +1,15 @@
 """Convenience exports for SQLAlchemy ORM models."""
 
 from app.models.example_record import ExampleRecord
+from app.models.context_engine import (
+    ContextActionableItemRecord,
+    ContextArtifactChunkRecord,
+    ContextArtifactRecord,
+    ContextEntityRecord,
+    ContextRelationshipRecord,
+    ContextSignalRecord,
+    ContextSourceLinkRecord,
+)
 from app.models.invitation import (
     InvitationCode,
     InvitationRedemption,
@@ -24,6 +33,13 @@ from app.models.voice import VoiceExperienceConfig, VoicePersona
 
 __all__ = [
     "ExampleRecord",
+    "ContextActionableItemRecord",
+    "ContextArtifactChunkRecord",
+    "ContextArtifactRecord",
+    "ContextEntityRecord",
+    "ContextRelationshipRecord",
+    "ContextSignalRecord",
+    "ContextSourceLinkRecord",
     "InvitationCode",
     "InvitationRedemption",
     "InvitationRequest",
