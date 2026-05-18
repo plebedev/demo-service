@@ -13,6 +13,7 @@ from app.core.context_engine.models import (
     ContextRelationship,
     ContextSignal,
     OwnerType,
+    PerspectiveView,
     SourceLink,
 )
 
@@ -145,6 +146,29 @@ class ContextRepository(Protocol):
         """Return actionable items visible in one owner namespace."""
         ...
 
+    def get_perspective_view(
+        self,
+        *,
+        domain_id: str,
+        owner_type: OwnerType,
+        owner_id: str,
+        view_definition_id: str,
+    ) -> PerspectiveView | None:
+        """Return one cached materialized perspective view, if available."""
+        ...
+
+    def store_perspective_view(
+        self,
+        *,
+        view: PerspectiveView,
+        domain_id: str,
+        owner_type: OwnerType,
+        owner_id: str,
+        source_artifacts: list[Artifact],
+    ) -> PerspectiveView:
+        """Persist one materialized perspective view."""
+        ...
+
 
 class InMemoryContextRepository:
     """Process-local repository used until durable storage is introduced."""
@@ -156,6 +180,9 @@ class InMemoryContextRepository:
         self.relationships: dict[str, ContextRelationship] = {}
         self.signals: dict[str, ContextSignal] = {}
         self.actionable_items: dict[str, ActionableItem] = {}
+        self.perspective_views: dict[
+            tuple[str, OwnerType, str, str], PerspectiveView
+        ] = {}
         self._artifact_index: dict[tuple[str, OwnerType, str], list[str]] = defaultdict(
             list
         )
@@ -337,3 +364,43 @@ class InMemoryContextRepository:
         """Return owner-scoped actionable items."""
         key = (domain_id, owner_type, owner_id)
         return [self.actionable_items[item_id] for item_id in self._task_index[key]]
+
+    def get_perspective_view(
+        self,
+        *,
+        domain_id: str,
+        owner_type: OwnerType,
+        owner_id: str,
+        view_definition_id: str,
+    ) -> PerspectiveView | None:
+        """Return one cached owner-scoped perspective view."""
+        key = (domain_id, owner_type, owner_id, view_definition_id)
+        view = self.perspective_views.get(key)
+        return view.model_copy(deep=True) if view is not None else None
+
+    def store_perspective_view(
+        self,
+        *,
+        view: PerspectiveView,
+        domain_id: str,
+        owner_type: OwnerType,
+        owner_id: str,
+        source_artifacts: list[Artifact],
+    ) -> PerspectiveView:
+        """Store one owner-scoped perspective view in memory."""
+        key = (domain_id, owner_type, owner_id, view.view_definition_id)
+        stored = view.model_copy(deep=True)
+        stored.metadata.update(_perspective_cache_metadata(source_artifacts))
+        self.perspective_views[key] = stored
+        return stored.model_copy(deep=True)
+
+
+def _perspective_cache_metadata(source_artifacts: list[Artifact]) -> dict[str, object]:
+    """Return generic cache metadata for source artifacts."""
+    latest = max((artifact.created_at for artifact in source_artifacts), default=None)
+    return {
+        "source_artifact_ids": [artifact.id for artifact in source_artifacts],
+        "source_artifact_count": len(source_artifacts),
+        "latest_artifact_created_at": latest.isoformat() if latest else None,
+        "is_stale": False,
+    }

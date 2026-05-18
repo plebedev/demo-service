@@ -12,6 +12,7 @@ from fastapi import (
     File,
     Form,
     HTTPException,
+    Query,
     Request,
     UploadFile,
     status,
@@ -440,16 +441,18 @@ def list_context_actionable_items(
 def get_context_view(
     domain_id: str,
     view_definition_id: str,
+    regenerate: bool = Query(default=False),
     claims: AccessTokenClaims = Depends(get_current_access_token),
     service: ContextEngineService = Depends(get_context_engine),
 ) -> PerspectiveViewResponse:
-    """Build one caller-owned perspective view for a Context Engine domain."""
+    """Return a caller-owned perspective view, regenerating only on request."""
     try:
-        view = service.build_perspective(
+        view = service.get_perspective(
             domain_id=domain_id,
             view_definition_id=view_definition_id,
             owner_type=OwnerType.INVITATION_CODE,
             owner_id=str(claims.invitation_code_id),
+            regenerate=regenerate,
         )
     except KeyError as exc:
         raise HTTPException(

@@ -2,9 +2,17 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi import FastAPI
 
 from app.core.config import Settings
+from app.core.context_engine.llm import (
+    ContextExecutionContext,
+    ContextExecutionMode,
+    PydanticAIContextModelRunner,
+    load_context_model_flow_catalog,
+)
 from app.core.context_engine.registry import DomainRegistry
 from app.core.context_engine.service import ContextEngineService
 from app.core.context_engine.sqlalchemy_storage import SQLAlchemyContextRepository
@@ -33,4 +41,26 @@ def attach_context_engine(app: FastAPI, settings: Settings) -> None:
     app.state.context_engine = ContextEngineService(
         registry=registry,
         repository=repository,
+        execution_context=_build_execution_context(settings),
     )
+
+
+def _build_execution_context(settings: Settings) -> ContextExecutionContext | None:
+    """Build generic Context Engine model execution helpers."""
+    try:
+        catalog = load_context_model_flow_catalog(
+            settings.context_engine_model_config_path
+        )
+    except ValueError:
+        if settings.environment == "test":
+            return None
+        raise
+    return ContextExecutionContext(
+        catalog=catalog,
+        runner=PydanticAIContextModelRunner(settings),
+        prompt_root=DOMAIN_PROMPT_ROOT,
+        mode_override=ContextExecutionMode(settings.context_engine_execution_mode),
+    )
+
+
+DOMAIN_PROMPT_ROOT = Path("app/domains")

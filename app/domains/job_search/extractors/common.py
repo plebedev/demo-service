@@ -46,12 +46,21 @@ def signal(
     **metadata: object,
 ) -> ContextSignal:
     """Create a source-grounded generic signal."""
+    explicit_or_inferred = (
+        "inferred"
+        if signal_type.startswith("inferred") or metadata.get("reason")
+        else "explicit"
+    )
     return ContextSignal(
         signal_type=signal_type,
         label=label,
         value=value,
         source_links=[source_link],
-        metadata={key: value for key, value in metadata.items() if value is not None},
+        metadata={
+            "generated_by": "deterministic",
+            "explicit_or_inferred": explicit_or_inferred,
+            **{key: value for key, value in metadata.items() if value is not None},
+        },
     )
 
 
@@ -66,7 +75,11 @@ def entity(
         entity_type=entity_type,
         name=name,
         source_links=[source_link],
-        metadata={key: value for key, value in metadata.items() if value is not None},
+        metadata={
+            "generated_by": "deterministic",
+            "explicit_or_inferred": "explicit",
+            **{key: value for key, value in metadata.items() if value is not None},
+        },
     )
 
 
@@ -86,7 +99,11 @@ def action(
         description=description,
         readiness_status=readiness_status,
         source_links=[source_link],
-        metadata={key: value for key, value in metadata.items() if value is not None},
+        metadata={
+            "generated_by": "deterministic",
+            "explicit_or_inferred": "inferred",
+            **{key: value for key, value in metadata.items() if value is not None},
+        },
     )
 
 

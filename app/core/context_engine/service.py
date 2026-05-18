@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+from typing import Any, Callable, cast
+
 from app.core.context_engine.chunking import SimpleTextChunker
+from app.core.context_engine.llm import ContextExecutionContext
 from app.core.context_engine.models import (
+    ActionableItem,
     Artifact,
+    ExtractionResult,
     IngestionRequest,
     IngestionResult,
     OwnerType,
@@ -24,10 +29,12 @@ class ContextEngineService:
         registry: DomainRegistry,
         repository: ContextRepository,
         default_chunker: SimpleTextChunker | None = None,
+        execution_context: ContextExecutionContext | None = None,
     ) -> None:
         self.registry = registry
         self.repository = repository
         self.default_chunker = default_chunker or SimpleTextChunker()
+        self.execution_context = execution_context
 
     def ingest_payload(
         self, domain_id: str, ingestor_id: str, payload: dict[str, object]
@@ -94,7 +101,16 @@ class ContextEngineService:
                 and request.artifact_type_id not in supported_artifact_type_ids
             ):
                 continue
-            result = extractor.extract(artifact, chunks)
+            extract_with_execution = getattr(extractor, "extract_with_execution", None)
+            if extract_with_execution is not None:
+                result = cast(
+                    ExtractionResult,
+                    cast(Callable[..., Any], extract_with_execution)(
+                        artifact, chunks, self.execution_context
+                    ),
+                )
+            else:
+                result = extractor.extract(artifact, chunks)
             entities.extend(result.entities)
             relationships.extend(result.relationships)
             signals.extend(result.signals)
@@ -102,7 +118,18 @@ class ContextEngineService:
             extractor_ids.append(extractor.id)
 
         for task_generator in domain.task_generators:
-            actionable_items.extend(task_generator.generate(artifact))
+            generate_with_execution = getattr(
+                task_generator, "generate_with_execution", None
+            )
+            if generate_with_execution is not None:
+                actionable_items = cast(
+                    list[ActionableItem],
+                    cast(Callable[..., Any], generate_with_execution)(
+                        artifact, chunks, actionable_items, self.execution_context
+                    ),
+                )
+            else:
+                actionable_items.extend(task_generator.generate(artifact))
 
         entities = self.repository.store_entities(entities)
         relationships = self.repository.store_relationships(relationships)
@@ -132,6 +159,69 @@ class ContextEngineService:
         owner_type: OwnerType,
         owner_id: str,
     ) -> PerspectiveView:
+        """Build and store one registered perspective from owner-scoped context."""
+        view, artifacts = self._build_perspective(
+            domain_id=domain_id,
+            view_definition_id=view_definition_id,
+            owner_type=owner_type,
+            owner_id=owner_id,
+        )
+        return self.repository.store_perspective_view(
+            view=view,
+            domain_id=domain_id,
+            owner_type=owner_type,
+            owner_id=owner_id,
+            source_artifacts=artifacts,
+        )
+
+    def get_perspective(
+        self,
+        *,
+        domain_id: str,
+        view_definition_id: str,
+        owner_type: OwnerType,
+        owner_id: str,
+        regenerate: bool = False,
+    ) -> PerspectiveView:
+        """Return a cached perspective view, regenerating only when requested."""
+        artifacts = self.repository.list_artifacts(
+            domain_id=domain_id,
+            owner_type=owner_type,
+            owner_id=owner_id,
+        )
+        if not regenerate:
+            cached = self.repository.get_perspective_view(
+                domain_id=domain_id,
+                owner_type=owner_type,
+                owner_id=owner_id,
+                view_definition_id=view_definition_id,
+            )
+            if cached is not None:
+                return _with_stale_metadata(cached, artifacts)
+        view, built_artifacts = self._build_perspective(
+            domain_id=domain_id,
+            view_definition_id=view_definition_id,
+            owner_type=owner_type,
+            owner_id=owner_id,
+            artifacts=artifacts,
+        )
+        return self.repository.store_perspective_view(
+            view=view,
+            domain_id=domain_id,
+            owner_type=owner_type,
+            owner_id=owner_id,
+            source_artifacts=built_artifacts,
+        )
+
+    def _build_perspective(
+        self,
+        *,
+        domain_id: str,
+        view_definition_id: str,
+        owner_type: OwnerType,
+        owner_id: str,
+        artifacts: list[Artifact] | None = None,
+    ) -> tuple[PerspectiveView, list[Artifact]]:
         """Build one registered perspective from owner-scoped generic context."""
         domain = self.registry.get_domain(domain_id)
         builder = next(
@@ -148,7 +238,7 @@ class ContextEngineService:
                 f"domain '{domain_id}'."
             )
 
-        artifacts = self.repository.list_artifacts(
+        artifacts = artifacts or self.repository.list_artifacts(
             domain_id=domain_id,
             owner_type=owner_type,
             owner_id=owner_id,
@@ -181,4 +271,36 @@ class ContextEngineService:
                 owner_id=owner_id,
             ),
         )
-        return builder.build(context)
+        build_with_execution = getattr(builder, "build_with_execution", None)
+        if build_with_execution is not None:
+            return (
+                cast(
+                    PerspectiveView,
+                    cast(Callable[..., Any], build_with_execution)(
+                        context, self.execution_context
+                    ),
+                ),
+                artifacts,
+            )
+        return builder.build(context), artifacts
+
+
+def _with_stale_metadata(
+    view: PerspectiveView, current_artifacts: list[Artifact]
+) -> PerspectiveView:
+    """Annotate a cached view with source freshness metadata."""
+    current_ids = [artifact.id for artifact in current_artifacts]
+    stored_ids = view.metadata.get("source_artifact_ids")
+    if not isinstance(stored_ids, list):
+        stored_ids = []
+    is_stale = current_ids != stored_ids
+    view.metadata["is_stale"] = is_stale
+    view.metadata["current_artifact_count"] = len(current_ids)
+    view.metadata["source_artifact_count"] = len(stored_ids)
+    if is_stale:
+        view.metadata["stale_reason"] = (
+            "Artifacts changed after this view was generated."
+        )
+    else:
+        view.metadata.pop("stale_reason", None)
+    return view

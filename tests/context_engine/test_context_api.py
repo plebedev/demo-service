@@ -8,6 +8,7 @@ from sqlalchemy import select
 from app.models.context_engine import (
     ContextActionableItemRecord,
     ContextArtifactRecord,
+    ContextPerspectiveViewRecord,
     ContextSignalRecord,
     ContextSourceLinkRecord,
 )
@@ -84,6 +85,60 @@ def test_context_view_api_builds_owner_scoped_perspective(client) -> None:
     assert response.status_code == 200
     assert response.json()["view"]["view_definition_id"] == "test-summary"
     assert response.json()["view"]["sections"][0]["content"] == "Perspective content"
+
+
+def test_context_view_api_caches_perspective_until_regenerate(
+    client, db_session
+) -> None:
+    headers = access_headers(client, "context-view-cache")
+
+    first = client.post(
+        "/api/context/domains/test-domain/artifacts",
+        headers=headers,
+        json={
+            "artifact_type_id": "note",
+            "title": "First note",
+            "text": "First cached perspective.",
+        },
+    )
+    assert first.status_code == 201
+    generated = client.get(
+        "/api/context/domains/test-domain/views/test-summary",
+        headers=headers,
+    )
+    assert generated.status_code == 200
+    assert (
+        generated.json()["view"]["sections"][0]["content"]
+        == "First cached perspective."
+    )
+
+    second = client.post(
+        "/api/context/domains/test-domain/artifacts",
+        headers=headers,
+        json={
+            "artifact_type_id": "note",
+            "title": "Second note",
+            "text": "Second source should mark stale.",
+        },
+    )
+    assert second.status_code == 201
+    cached = client.get(
+        "/api/context/domains/test-domain/views/test-summary",
+        headers=headers,
+    )
+    assert cached.status_code == 200
+    cached_view = cached.json()["view"]
+    assert cached_view["sections"][0]["content"] == "First cached perspective."
+    assert cached_view["metadata"]["is_stale"] is True
+    assert cached_view["metadata"]["current_artifact_count"] == 2
+
+    regenerated = client.get(
+        "/api/context/domains/test-domain/views/test-summary?regenerate=true",
+        headers=headers,
+    )
+    assert regenerated.status_code == 200
+    assert regenerated.json()["view"]["metadata"]["is_stale"] is False
+    assert db_session.scalar(select(ContextPerspectiveViewRecord).limit(1)) is not None
 
 
 def test_context_artifact_api_lists_and_returns_owner_scoped_artifacts(client) -> None:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
-from typing import Any
+from typing import Any, cast
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -17,6 +17,7 @@ from app.core.context_engine.models import (
     ContextRelationship,
     ContextSignal,
     OwnerType,
+    PerspectiveView,
     ReadinessStatus,
     SourceLink,
 )
@@ -25,6 +26,7 @@ from app.models.context_engine import (
     ContextArtifactChunkRecord,
     ContextArtifactRecord,
     ContextEntityRecord,
+    ContextPerspectiveViewRecord,
     ContextRelationshipRecord,
     ContextSignalRecord,
     ContextSourceLinkRecord,
@@ -398,6 +400,91 @@ class SQLAlchemyContextRepository:
             ).all()
             return [self._item_from_record(record) for record in records]
 
+    def get_perspective_view(
+        self,
+        *,
+        domain_id: str,
+        owner_type: OwnerType,
+        owner_id: str,
+        view_definition_id: str,
+    ) -> PerspectiveView | None:
+        """Return one cached owner-scoped materialized perspective view."""
+        with self.session_factory() as session:
+            record = session.scalar(
+                select(ContextPerspectiveViewRecord)
+                .where(ContextPerspectiveViewRecord.domain_id == domain_id)
+                .where(ContextPerspectiveViewRecord.owner_type == owner_type.value)
+                .where(ContextPerspectiveViewRecord.owner_id == owner_id)
+                .where(
+                    ContextPerspectiveViewRecord.view_definition_id
+                    == view_definition_id
+                )
+            )
+            return self._view_from_record(record) if record is not None else None
+
+    def store_perspective_view(
+        self,
+        *,
+        view: PerspectiveView,
+        domain_id: str,
+        owner_type: OwnerType,
+        owner_id: str,
+        source_artifacts: list[Artifact],
+    ) -> PerspectiveView:
+        """Create or replace one cached owner-scoped perspective view."""
+        source_artifact_ids = [artifact.id for artifact in source_artifacts]
+        latest_artifact_created_at = max(
+            (artifact.created_at for artifact in source_artifacts),
+            default=None,
+        )
+        view_to_store = view.model_copy(deep=True)
+        view_to_store.metadata.update(
+            {
+                "source_artifact_ids": source_artifact_ids,
+                "source_artifact_count": len(source_artifact_ids),
+                "latest_artifact_created_at": (
+                    latest_artifact_created_at.isoformat()
+                    if latest_artifact_created_at is not None
+                    else None
+                ),
+                "is_stale": False,
+            }
+        )
+        with self.session_factory() as session:
+            record = session.scalar(
+                select(ContextPerspectiveViewRecord)
+                .where(ContextPerspectiveViewRecord.domain_id == domain_id)
+                .where(ContextPerspectiveViewRecord.owner_type == owner_type.value)
+                .where(ContextPerspectiveViewRecord.owner_id == owner_id)
+                .where(
+                    ContextPerspectiveViewRecord.view_definition_id
+                    == view.view_definition_id
+                )
+            )
+            if record is None:
+                record = ContextPerspectiveViewRecord(
+                    id=view_to_store.id,
+                    domain_id=domain_id,
+                    owner_type=owner_type.value,
+                    owner_id=owner_id,
+                    view_definition_id=view.view_definition_id,
+                    view_json=view_to_store.model_dump_json(),
+                    source_artifact_ids_json=_json_dump(source_artifact_ids),
+                    artifact_count=len(source_artifact_ids),
+                    latest_artifact_created_at=latest_artifact_created_at,
+                )
+                session.add(record)
+            else:
+                record.id = view_to_store.id
+                record.view_json = view_to_store.model_dump_json()
+                record.source_artifact_ids_json = _json_dump(source_artifact_ids)
+                record.artifact_count = len(source_artifact_ids)
+                record.latest_artifact_created_at = cast(
+                    Any, latest_artifact_created_at
+                )
+            session.commit()
+        return view_to_store
+
     def _add_source_link_records(
         self,
         session: Session,
@@ -485,3 +572,22 @@ class SQLAlchemyContextRepository:
             source_links=_source_links_load(record.source_links_json),
             metadata=_json_load(record.metadata_json, {}),
         )
+
+    def _view_from_record(
+        self, record: ContextPerspectiveViewRecord
+    ) -> PerspectiveView:
+        view = PerspectiveView.model_validate_json(record.view_json)
+        view.metadata.setdefault(
+            "source_artifact_ids", _json_load(record.source_artifact_ids_json, [])
+        )
+        view.metadata.setdefault("source_artifact_count", record.artifact_count)
+        view.metadata.setdefault(
+            "latest_artifact_created_at",
+            (
+                record.latest_artifact_created_at.isoformat()
+                if record.latest_artifact_created_at is not None
+                else None
+            ),
+        )
+        view.metadata.setdefault("generated_at", record.generated_at.isoformat())
+        return view

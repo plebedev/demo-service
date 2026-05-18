@@ -57,6 +57,13 @@ class Settings(BaseSettings):
         default="app/resources/post_processors/post-processors.yaml",
         alias="POST_PROCESSOR_CONFIG_PATH",
     )
+    context_engine_model_config_path: str = Field(
+        default="app/resources/context_engine/model-flows.yaml",
+        alias="CONTEXT_ENGINE_MODEL_CONFIG_PATH",
+    )
+    context_engine_execution_mode: str = Field(
+        default="hybrid", alias="CONTEXT_ENGINE_EXECUTION_MODE"
+    )
     max_files_per_run: int = Field(default=3, alias="MAX_FILES_PER_RUN")
     max_file_size_bytes: int = Field(default=5_242_880, alias="MAX_FILE_SIZE_BYTES")
     max_extracted_text_bytes: int = Field(

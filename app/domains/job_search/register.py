@@ -16,6 +16,11 @@ from app.domains.job_search.extractors import (
     PersonalStoryExtractor,
     ResumeExtractor,
 )
+from app.domains.job_search.llm import (
+    LLMAssistedExtractor,
+    LLMAssistedPerspectiveBuilder,
+    LLMAssistedTaskGenerator,
+)
 from app.domains.job_search.perspectives import (
     ApplicationPipelinePerspectiveBuilder,
     CompensationScopeRiskPerspectiveBuilder,
@@ -65,20 +70,20 @@ def build_job_search_domain_pack() -> DomainPack:
             for entry in artifact_type_entries
         ],
         extractors=[
-            JobDescriptionExtractor(),
-            ResumeExtractor(),
-            InterviewNotesExtractor(),
-            PersonalStoryExtractor(),
-            CareerContextNotesExtractor(),
+            LLMAssistedExtractor(JobDescriptionExtractor()),
+            LLMAssistedExtractor(ResumeExtractor()),
+            LLMAssistedExtractor(InterviewNotesExtractor()),
+            LLMAssistedExtractor(PersonalStoryExtractor()),
+            LLMAssistedExtractor(CareerContextNotesExtractor()),
         ],
         perspective_builders=[
-            RoleFitPerspectiveBuilder(),
-            InterviewPrepPerspectiveBuilder(),
-            ResumePositioningPerspectiveBuilder(),
-            ApplicationPipelinePerspectiveBuilder(),
-            CompensationScopeRiskPerspectiveBuilder(),
+            LLMAssistedPerspectiveBuilder(RoleFitPerspectiveBuilder()),
+            LLMAssistedPerspectiveBuilder(InterviewPrepPerspectiveBuilder()),
+            LLMAssistedPerspectiveBuilder(ResumePositioningPerspectiveBuilder()),
+            LLMAssistedPerspectiveBuilder(ApplicationPipelinePerspectiveBuilder()),
+            LLMAssistedPerspectiveBuilder(CompensationScopeRiskPerspectiveBuilder()),
         ],
-        task_generators=[JobSearchTaskGenerator()],
+        task_generators=[LLMAssistedTaskGenerator(JobSearchTaskGenerator())],
         view_definitions=[
             ViewDefinition(
                 id=str(entry["id"]),
@@ -93,6 +98,8 @@ def build_job_search_domain_pack() -> DomainPack:
             "domain_pack": str(manifest["id"]),
             "status": str(manifest.get("status", "mvp")),
             "source_grounded": bool(manifest.get("source_grounded", True)),
+            "execution_modes": ["deterministic", "llm", "hybrid"],
+            "llm_assisted": True,
             "unsupported_inputs": list(manifest.get("unsupported_inputs", [])),
             "extractor_routing": {
                 str(entry["id"]): list(entry.get("extractor_ids", []))

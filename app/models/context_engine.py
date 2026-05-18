@@ -131,6 +131,38 @@ class ContextActionableItemRecord(Base):
     metadata_json: Mapped[str] = mapped_column(Text, nullable=True)
 
 
+class ContextPerspectiveViewRecord(Base):
+    """Persisted materialized Context Engine perspective view."""
+
+    __tablename__ = "context_perspective_views"
+    __table_args__ = (
+        UniqueConstraint(
+            "domain_id",
+            "owner_type",
+            "owner_id",
+            "view_definition_id",
+            name="uq_context_perspective_views_owner_view",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    domain_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    owner_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    owner_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    view_definition_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    view_json: Mapped[str] = mapped_column(Text, nullable=False)
+    source_artifact_ids_json: Mapped[str] = mapped_column(Text, nullable=False)
+    artifact_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    latest_artifact_created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    generated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+
+
 class ContextSourceLinkRecord(Base):
     """Persisted source-link audit row for derived context."""
 

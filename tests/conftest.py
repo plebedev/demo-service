@@ -116,6 +116,7 @@ def reset_database(
                 """
                 TRUNCATE TABLE
                     context_source_links,
+                    context_perspective_views,
                     context_actionable_items,
                     context_signals,
                     context_relationships,
