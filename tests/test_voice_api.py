@@ -677,8 +677,8 @@ def test_openai_voice_client_connect_does_not_send_beta_header(monkeypatch) -> N
     assert captured["headers"] == {"Authorization": "Bearer test-key"}
 
 
-def test_stream_instructions_include_synthesized_greeting() -> None:
-    """The realtime opening turn is grounded in the saved voice greeting."""
+def test_stream_instructions_ignore_synthesized_greeting() -> None:
+    """The realtime opening turn is controlled by persona instructions."""
     from app.api.routes.voice import _build_stream_instructions
 
     persona = VoicePersona(
@@ -695,13 +695,11 @@ def test_stream_instructions_include_synthesized_greeting() -> None:
 
     instructions = _build_stream_instructions(
         persona,
-        cfg,
         "Tool instructions:\n- record_answer: Record answers.",
     )
 
     assert instructions.startswith("Ask careful intake questions.")
-    assert "Open the conversation by saying this greeting first" in instructions
-    assert "Hi, I am ready to help with workforce planning." in instructions
+    assert cfg.synthesized_greeting not in instructions
     assert "Tool instructions:" in instructions
 
 

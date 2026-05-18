@@ -486,7 +486,7 @@ async def _handle_twilio_messages(
                 voice=voice,
             )
             tool_prompt = _voice_tool_registry.prompt_block() or ""
-            instructions = _build_stream_instructions(persona, voice_cfg, tool_prompt)
+            instructions = _build_stream_instructions(persona, tool_prompt)
             await vc.configure_session(
                 instructions=instructions,
                 tools=_voice_tool_registry.tool_definitions(),
@@ -678,16 +678,10 @@ async def _ws_iter(ws: WebSocket):  # type: ignore[no-untyped-def]
 
 def _build_stream_instructions(
     persona: VoicePersona,
-    voice_cfg: VoiceExperienceConfig | None,
     tool_prompt: str,
 ) -> str:
-    """Build realtime instructions, including the configured opening greeting."""
+    """Build realtime instructions from persona guidance and tool rules."""
     parts = [persona.instructions]
-    if voice_cfg is not None and voice_cfg.synthesized_greeting:
-        parts.append(
-            "Open the conversation by saying this greeting first, then continue "
-            f"naturally: {voice_cfg.synthesized_greeting}"
-        )
     if tool_prompt:
         parts.append(tool_prompt)
     return "\n\n".join(parts)
