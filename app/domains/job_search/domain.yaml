@@ -22,24 +22,28 @@ artifact_types:
       - resume-extractor
   - id: recruiter_message
     display_name: Recruiter Message
-    extractor_ids: []
+    extractor_ids:
+      - career-context-notes-extractor
   - id: interview_notes
     display_name: Interview Notes
     extractor_ids:
       - interview-notes-extractor
   - id: company_research
     display_name: Company Research
-    extractor_ids: []
+    extractor_ids:
+      - career-context-notes-extractor
   - id: personal_story
     display_name: Personal Story
     extractor_ids:
       - personal-story-extractor
   - id: compensation_notes
     display_name: Compensation Notes
-    extractor_ids: []
+    extractor_ids:
+      - career-context-notes-extractor
   - id: follow_up_notes
     display_name: Follow-Up Notes
-    extractor_ids: []
+    extractor_ids:
+      - career-context-notes-extractor
 views:
   - id: role_fit
     display_name: Role Fit
@@ -61,5 +65,6 @@ extractors:
   - resume-extractor
   - interview-notes-extractor
   - personal-story-extractor
+  - career-context-notes-extractor
 task_generators:
   - job-search-task-generator

@@ -96,6 +96,21 @@ class ContextRepository(Protocol):
         """Return artifacts visible in one owner namespace."""
         ...
 
+    def get_artifact(
+        self,
+        *,
+        domain_id: str,
+        owner_type: OwnerType,
+        owner_id: str,
+        artifact_id: str,
+    ) -> Artifact | None:
+        """Return one owner-scoped artifact, if visible."""
+        ...
+
+    def list_chunks_for_artifact(self, artifact_id: str) -> list[ArtifactChunk]:
+        """Return chunks for one artifact."""
+        ...
+
     def list_chunks_for_artifacts(self, artifact_ids: list[str]) -> list[ArtifactChunk]:
         """Return chunks for the provided artifact ids."""
         ...
@@ -251,6 +266,31 @@ class InMemoryContextRepository:
         key = (domain_id, owner_type, owner_id)
         return [
             self.artifacts[artifact_id] for artifact_id in self._artifact_index[key]
+        ]
+
+    def get_artifact(
+        self,
+        *,
+        domain_id: str,
+        owner_type: OwnerType,
+        owner_id: str,
+        artifact_id: str,
+    ) -> Artifact | None:
+        """Return one owner-scoped artifact, if visible."""
+        artifact = self.artifacts.get(artifact_id)
+        if (
+            artifact is None
+            or artifact.domain_id != domain_id
+            or artifact.owner_type != owner_type
+            or artifact.owner_id != owner_id
+        ):
+            return None
+        return artifact
+
+    def list_chunks_for_artifact(self, artifact_id: str) -> list[ArtifactChunk]:
+        """Return chunks for one artifact."""
+        return [
+            chunk for chunk in self.chunks.values() if chunk.artifact_id == artifact_id
         ]
 
     def list_chunks_for_artifacts(self, artifact_ids: list[str]) -> list[ArtifactChunk]:

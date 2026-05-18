@@ -52,6 +52,7 @@ def test_job_search_domain_registers_expected_extensions() -> None:
         "resume-extractor",
         "interview-notes-extractor",
         "personal-story-extractor",
+        "career-context-notes-extractor",
     ]
     assert [builder.id for builder in pack.perspective_builders] == [
         "role_fit",
@@ -61,8 +62,12 @@ def test_job_search_domain_registers_expected_extensions() -> None:
         "compensation_scope_risk",
     ]
     assert pack.artifact_types[2].id == "recruiter_message"
-    assert pack.artifact_types[2].metadata["extractor_ids"] == []
-    assert pack.metadata["extractor_routing"]["company_research"] == []
+    assert pack.artifact_types[2].metadata["extractor_ids"] == [
+        "career-context-notes-extractor"
+    ]
+    assert pack.metadata["extractor_routing"]["company_research"] == [
+        "career-context-notes-extractor"
+    ]
 
 
 def test_job_description_extraction_outputs_source_grounded_context() -> None:
@@ -105,7 +110,12 @@ def test_job_description_extraction_outputs_source_grounded_context() -> None:
         for link in signal.source_links
     )
     assert {item.item_type for item in result.actionable_items}.issuperset(
-        {"prepare_interview_brief", "research_company", "clarify_scope"}
+        {
+            "prepare_interview_brief",
+            "research_company_concerns",
+            "clarify_scope",
+            "clarify_compensation_expectations",
+        }
     )
     assert result.extractor_ids == ["job-description-extractor"]
 
@@ -182,9 +192,36 @@ def test_resume_interview_and_story_extractors_feed_perspectives() -> None:
         "Open Questions",
     ]
     assert role_fit.sections[0].evidence_links
-    assert role_fit.sections[0].evidence_links[0].confidence is None
+    assert role_fit.sections[0].evidence_links[0].confidence == 0.95
     assert interview.sections[1].title == "Best Supporting Stories"
     assert "reduced incidents" in (interview.sections[1].content or "")
+
+
+def test_note_artifacts_generate_context_and_actions() -> None:
+    service = build_service()
+
+    result = service.ingest_artifact(
+        IngestionRequest(
+            domain_id="job_search",
+            artifact_type_id="recruiter_message",
+            owner_type=OwnerType.INVITATION_CODE,
+            owner_id="invite-1",
+            title="Recruiter note",
+            text=(
+                "Are you available next week?\n"
+                "The role is hybrid and the salary range is $180k-$210k.\n"
+            ),
+        )
+    )
+
+    signal_types = {signal.signal_type for signal in result.signals}
+    assert {"open_question", "compensation", "location_constraint"}.issubset(
+        signal_types
+    )
+    assert {item.item_type for item in result.actionable_items} == {
+        "draft_recruiter_follow_up"
+    }
+    assert result.extractor_ids == ["career-context-notes-extractor"]
 
 
 def test_invalid_job_search_artifact_type_is_rejected() -> None:

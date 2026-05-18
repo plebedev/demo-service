@@ -18,15 +18,17 @@ view, unsupported-input, and extractor-routing metadata.
 - `compensation_notes`
 - `follow_up_notes`
 
-The MVP registers all eight artifact types so they can be ingested and
-source-linked. Four artifact types currently have deterministic extractors:
-`job_description`, `resume`, `interview_notes`, and `personal_story`.
-`recruiter_message`, `company_research`, `compensation_notes`, and
-`follow_up_notes` are intentionally metadata/task-ready only in this milestone.
+The MVP registers all eight artifact types so they can be ingested,
+source-linked, extracted, and used in generated views. Specialized extractors
+cover `job_description`, `resume`, `interview_notes`, and `personal_story`.
+`CareerContextNotesExtractor` covers `recruiter_message`, `company_research`,
+`compensation_notes`, and `follow_up_notes` with lightweight deterministic
+signals.
 
 ## Registered Extensions
 
-- Extractors: job description, resume, interview notes, personal story
+- Extractors: job description, resume, interview notes, personal story, and
+  career-context notes
 - Perspectives: role fit, interview prep, resume positioning, application
   pipeline, compensation and scope risk
 - Task generator: job-search next actions mapped to generic `ActionableItem`

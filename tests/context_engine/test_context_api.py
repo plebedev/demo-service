@@ -86,6 +86,72 @@ def test_context_view_api_builds_owner_scoped_perspective(client) -> None:
     assert response.json()["view"]["sections"][0]["content"] == "Perspective content"
 
 
+def test_context_artifact_api_lists_and_returns_owner_scoped_artifacts(client) -> None:
+    owner_headers = access_headers(client, "context-artifact-list")
+    other_headers = access_headers(client, "context-artifact-other")
+
+    created = client.post(
+        "/api/context/domains/test-domain/artifacts",
+        headers=owner_headers,
+        json={
+            "artifact_type_id": "note",
+            "title": "Queryable note",
+            "text": "Queryable owner-scoped context.",
+        },
+    )
+    assert created.status_code == 201
+    artifact_id = created.json()["artifact"]["id"]
+
+    listed = client.get(
+        "/api/context/domains/test-domain/artifacts",
+        headers=owner_headers,
+    )
+    assert listed.status_code == 200
+    assert [artifact["id"] for artifact in listed.json()["artifacts"]] == [artifact_id]
+
+    detail = client.get(
+        f"/api/context/domains/test-domain/artifacts/{artifact_id}",
+        headers=owner_headers,
+    )
+    assert detail.status_code == 200
+    assert detail.json()["artifact"]["title"] == "Queryable note"
+    assert detail.json()["chunks"][0]["source_link"]["artifact_id"] == artifact_id
+
+    hidden_detail = client.get(
+        f"/api/context/domains/test-domain/artifacts/{artifact_id}",
+        headers=other_headers,
+    )
+    assert hidden_detail.status_code == 404
+
+
+def test_context_upload_api_extracts_text_file_and_preserves_metadata(client) -> None:
+    headers = access_headers(client, "context-upload")
+
+    uploaded = client.post(
+        "/api/context/domains/test-domain/artifact-uploads",
+        headers=headers,
+        data={
+            "artifact_type_id": "note",
+            "title": "Uploaded note",
+            "metadata_json": '{"source":"candidate paste"}',
+        },
+        files={
+            "file": (
+                "note.txt",
+                b"Uploaded context extraction.",
+                "text/plain",
+            )
+        },
+    )
+
+    assert uploaded.status_code == 201
+    payload = uploaded.json()
+    assert payload["artifact"]["title"] == "Uploaded note"
+    assert payload["artifact"]["text"] == "Uploaded context extraction."
+    assert payload["artifact"]["metadata"]["ingestion_method"] == "upload"
+    assert payload["artifact"]["metadata"]["source"] == "candidate paste"
+
+
 def test_context_artifact_api_ingests_and_scopes_outputs(client) -> None:
     owner_headers = access_headers(client, "context-owner")
     other_headers = access_headers(client, "context-other")
@@ -130,6 +196,13 @@ def test_context_artifact_api_ingests_and_scopes_outputs(client) -> None:
     )
     assert owner_tasks.status_code == 200
     assert len(owner_tasks.json()["tasks"]) == 2
+
+    owner_actionable_items = client.get(
+        "/api/context/domains/test-domain/actionable-items",
+        headers=owner_headers,
+    )
+    assert owner_actionable_items.status_code == 200
+    assert owner_actionable_items.json() == owner_tasks.json()
 
     other_signals = client.get(
         "/api/context/domains/test-domain/signals",

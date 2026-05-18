@@ -282,6 +282,35 @@ class SQLAlchemyContextRepository:
             ).all()
             return [self._artifact_from_record(record) for record in records]
 
+    def get_artifact(
+        self,
+        *,
+        domain_id: str,
+        owner_type: OwnerType,
+        owner_id: str,
+        artifact_id: str,
+    ) -> Artifact | None:
+        """Return one owner-scoped artifact, if visible."""
+        with self.session_factory() as session:
+            record = session.scalar(
+                select(ContextArtifactRecord)
+                .where(ContextArtifactRecord.id == artifact_id)
+                .where(ContextArtifactRecord.domain_id == domain_id)
+                .where(ContextArtifactRecord.owner_type == owner_type.value)
+                .where(ContextArtifactRecord.owner_id == owner_id)
+            )
+            return self._artifact_from_record(record) if record is not None else None
+
+    def list_chunks_for_artifact(self, artifact_id: str) -> list[ArtifactChunk]:
+        """Return chunks for one artifact."""
+        with self.session_factory() as session:
+            records = session.scalars(
+                select(ContextArtifactChunkRecord)
+                .where(ContextArtifactChunkRecord.artifact_id == artifact_id)
+                .order_by(ContextArtifactChunkRecord.chunk_index)
+            ).all()
+            return [self._chunk_from_record(record) for record in records]
+
     def list_chunks_for_artifacts(self, artifact_ids: list[str]) -> list[ArtifactChunk]:
         """Return chunks for the provided artifact ids."""
         if not artifact_ids:

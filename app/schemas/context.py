@@ -77,6 +77,19 @@ class ContextArtifactIngestResponse(BaseModel):
     extractor_ids: list[str]
 
 
+class ContextArtifactListResponse(BaseModel):
+    """Owner-scoped artifact list."""
+
+    artifacts: list[Artifact]
+
+
+class ContextArtifactDetailResponse(BaseModel):
+    """Owner-scoped artifact detail with persisted chunks."""
+
+    artifact: Artifact
+    chunks: list[ArtifactChunk]
+
+
 class ContextSignalListResponse(BaseModel):
     """Owner-scoped context signal list."""
 

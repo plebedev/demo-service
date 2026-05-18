@@ -30,10 +30,17 @@ def _evidence(signals: list[ContextSignal]) -> list[EvidenceLink]:
     links: list[EvidenceLink] = []
     for signal in signals[:8]:
         for source in signal.source_links[:1]:
+            evidence_kind = (
+                "inferred"
+                if signal.signal_type.startswith("inferred")
+                or signal.metadata.get("reason") is not None
+                else "explicit"
+            )
             links.append(
                 EvidenceLink(
                     source=source,
-                    note=signal.label,
+                    note=f"{signal.label} ({evidence_kind})",
+                    confidence=0.72 if evidence_kind == "inferred" else 0.95,
                 )
             )
     return links
@@ -50,6 +57,20 @@ def _section(
         title=title,
         content=_content(signals, empty),
         evidence_links=_evidence(signals),
+        metadata={
+            "signal_types": sorted({signal.signal_type for signal in signals}),
+            "evidence_kinds": sorted(
+                {
+                    (
+                        "inferred"
+                        if signal.signal_type.startswith("inferred")
+                        or signal.metadata.get("reason") is not None
+                        else "explicit"
+                    )
+                    for signal in signals
+                }
+            ),
+        },
     )
 
 
@@ -68,7 +89,16 @@ def _task_section(
             EvidenceLink(source=link, note=item.title) for link in item.source_links[:1]
         )
     return ViewSection(
-        id=section_id, title=title, content=content, evidence_links=evidence
+        id=section_id,
+        title=title,
+        content=content,
+        evidence_links=evidence,
+        metadata={
+            "item_types": sorted(item_types),
+            "readiness_statuses": sorted(
+                {item.readiness_status.value for item in items}
+            ),
+        },
     )
 
 
@@ -77,7 +107,11 @@ def _manual_section(
 ) -> ViewSection:
     evidence = [EvidenceLink(source=source)] if source is not None else []
     return ViewSection(
-        id=section_id, title=title, content=text, evidence_links=evidence
+        id=section_id,
+        title=title,
+        content=text,
+        evidence_links=evidence,
+        metadata={"evidence_kinds": ["human_judgment"]},
     )
 
 
@@ -95,7 +129,11 @@ class RoleFitPerspectiveBuilder:
         risks = _signals(context, "inferred_risk", "unusual_scope_indicator")
         missing = _signals(context, "open_question", "interviewer_concern")
         positioning = _signals(
-            context, "leadership_signal", "measurable_outcome", "ai_agent_experience"
+            context,
+            "leadership_signal",
+            "measurable_outcome",
+            "ai_agent_experience",
+            "role_experience",
         )
         return PerspectiveView(
             view_definition_id=self.id,
@@ -123,7 +161,12 @@ class RoleFitPerspectiveBuilder:
                 _section(
                     "open_questions",
                     "Open Questions",
-                    _signals(context, "open_question"),
+                    _signals(
+                        context,
+                        "open_question",
+                        "location_constraint",
+                        "company_signal",
+                    ),
                     "No open questions captured yet.",
                 ),
             ],
@@ -145,7 +188,12 @@ class InterviewPrepPerspectiveBuilder:
                 _section(
                     "themes",
                     "Likely Interview Themes",
-                    _signals(context, "technical_theme", "leadership_expectation"),
+                    _signals(
+                        context,
+                        "technical_theme",
+                        "leadership_expectation",
+                        "company_signal",
+                    ),
                     "No interview themes yet.",
                 ),
                 _section(
@@ -180,6 +228,7 @@ class InterviewPrepPerspectiveBuilder:
                         "interviewer_concern",
                         "interview_risk",
                         "inferred_risk",
+                        "company_signal",
                     ),
                     "No concerns captured yet.",
                 ),
@@ -260,7 +309,7 @@ class ApplicationPipelinePerspectiveBuilder:
                     {
                         "prepare_interview_brief",
                         "draft_recruiter_follow_up",
-                        "research_company",
+                        "research_company_concerns",
                     },
                     "No next actions generated yet.",
                 ),
@@ -275,6 +324,7 @@ class ApplicationPipelinePerspectiveBuilder:
                         "draft_recruiter_follow_up",
                         "clarify_compensation_expectations",
                         "clarify_scope",
+                        "prepare_architecture_story",
                     },
                     "No follow-up tasks generated yet.",
                 ),

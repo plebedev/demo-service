@@ -94,6 +94,8 @@ Current backend responsibilities:
 - split artifacts into source-linked chunks
 - run registered extractors and task generators
 - store generic entities, relationships, signals, and actionable items through repository abstractions
+- return owner-scoped artifact lists/details for source inspection workflows
+- extract uploaded UTF-8 text files and PDFs with embedded text for ingestion
 - preserve `SourceLink` provenance from derived context back to the source artifact/chunk
 - scope records through generic owner metadata so the existing invite-code access model remains usable
 
@@ -167,11 +169,9 @@ The MVP extractors are rule-based and source-grounded:
   and next actions
 - `PersonalStoryExtractor`: situation, action, result, competencies,
   leadership themes, and technical themes
-
-The remaining registered artifact types are intentionally supported for
-ingestion and provenance first. Their `domain.yaml` entries currently have empty
-`extractor_ids`, so they persist as source material and can seed generic tasks
-without pretending richer extraction exists yet.
+- `CareerContextNotesExtractor`: recruiter questions, company signals,
+  compensation notes, follow-up signals, location/process constraints, and
+  company concerns for the remaining note-style artifact types
 
 Registered perspective views:
 
@@ -189,8 +189,12 @@ The generic Context Engine routes are protected by the existing signed access to
 GET  /api/context/domains
 GET  /api/context/domains/{domain_id}
 POST /api/context/domains/{domain_id}/artifacts
+POST /api/context/domains/{domain_id}/artifact-uploads
+GET  /api/context/domains/{domain_id}/artifacts
+GET  /api/context/domains/{domain_id}/artifacts/{artifact_id}
 GET  /api/context/domains/{domain_id}/signals
 GET  /api/context/domains/{domain_id}/tasks
+GET  /api/context/domains/{domain_id}/actionable-items
 GET  /api/context/domains/{domain_id}/views/{view_definition_id}
 ```
 
@@ -216,6 +220,16 @@ curl -X POST "$BACKEND/api/context/domains/job_search/artifacts" \
   -H "Authorization: Bearer $ACCESS_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"artifact_type_id":"job_description","title":"Staff Platform Engineer","text":"Title: Staff Platform Engineer\nCompany: Acme AI\nResponsibilities: lead Kubernetes and AI platform work."}'
+```
+
+Example file upload:
+
+```bash
+curl -X POST "$BACKEND/api/context/domains/job_search/artifact-uploads" \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -F artifact_type_id=resume \
+  -F title="Candidate resume" \
+  -F file=@resume.txt
 ```
 
 ## Rust text tools sidecar

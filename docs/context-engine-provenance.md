@@ -15,5 +15,10 @@ sections can all carry provenance through source links or evidence links.
 Durable storage keeps source links both embedded in generic output records and
 as `context_source_links` audit rows.
 
+Artifact list/detail APIs expose the original owner-scoped source records back
+to the frontend so evidence links can navigate to the underlying artifact. View
+sections label evidence as explicit or inferred through section metadata and
+evidence notes; the UI should keep that distinction visible.
+
 The MVP does not claim unsupported knowledge. If no source exists for a view
 section or task, the UI and API should represent that absence directly.

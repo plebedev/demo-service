@@ -14,6 +14,11 @@ Each response contains:
 - `EvidenceLink`
 - `SourceLink`
 
+The first workbench milestone materializes five Job Search perspectives: Role
+Fit, Interview Prep, Resume Positioning, Application Pipeline, and Compensation
+and Scope Risk. Sections include evidence links and metadata that lets the UI
+distinguish explicit source signals from inferred risk/judgment signals.
+
 The builder receives `PerspectiveBuildContext`, which contains artifacts,
 chunks, entities, relationships, signals, and actionable items for the signed
 invitation-code owner. This keeps views reusable across future domains without

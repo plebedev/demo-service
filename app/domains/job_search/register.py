@@ -10,6 +10,7 @@ import yaml  # type: ignore[import-untyped]
 from app.core.context_engine.interfaces import DomainPack, ViewDefinition
 from app.core.context_engine.models import ArtifactType
 from app.domains.job_search.extractors import (
+    CareerContextNotesExtractor,
     InterviewNotesExtractor,
     JobDescriptionExtractor,
     PersonalStoryExtractor,
@@ -68,6 +69,7 @@ def build_job_search_domain_pack() -> DomainPack:
             ResumeExtractor(),
             InterviewNotesExtractor(),
             PersonalStoryExtractor(),
+            CareerContextNotesExtractor(),
         ],
         perspective_builders=[
             RoleFitPerspectiveBuilder(),
