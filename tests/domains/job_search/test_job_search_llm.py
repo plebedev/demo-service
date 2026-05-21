@@ -16,16 +16,39 @@ from app.core.context_engine.llm import (
     ContextModelFlowCatalog,
     ResolvedContextModelStep,
 )
-from app.core.context_engine.models import IngestionRequest, IngestionResult, OwnerType
+from app.core.context_engine.models import (
+    ActionableItem,
+    Artifact,
+    ArtifactChunk,
+    ContextSignal,
+    EvidenceLink,
+    IngestionRequest,
+    IngestionResult,
+    OwnerType,
+    PerspectiveBuildContext,
+    PerspectiveView,
+    ReadinessStatus,
+    SourceLink,
+    ViewSection,
+)
 from app.core.context_engine.registry import DomainRegistry
 from app.core.context_engine.service import ContextEngineService
 from app.core.context_engine.storage import InMemoryContextRepository
 from app.domains.job_search import build_job_search_domain_pack
 from app.domains.job_search.llm import (
     LLMActionableItemOutput,
+    LLMContextEntity,
+    LLMContextRelationship,
     LLMExtractionOutput,
+    LLMSourceReference,
     LLMPerspectiveOutput,
+    PerspectiveContextGraph,
+    _map_extraction_output,
+    _perspective_prompt,
+    _select_perspective_chunks,
+    _select_perspective_signals,
 )
+from app.domains.job_search.register import _context_graph_for_view
 
 StructuredOutputT = TypeVar("StructuredOutputT", bound=BaseModel)
 
@@ -411,4 +434,292 @@ def test_ungrounded_llm_claim_is_rejected_and_falls_back() -> None:
     assert any(
         "Unknown source chunk" in signal.metadata.get("fallback_warning", "")
         for signal in result.signals
+    )
+
+
+def test_llm_relationships_resolve_entity_names_to_entity_ids() -> None:
+    artifact, chunk = build_artifact_and_chunk()
+    step = build_catalog().resolve_step(
+        domain_id="job_search",
+        flow_id="extraction",
+        step_id="artifact_extraction",
+    )
+
+    result = _map_extraction_output(
+        LLMExtractionOutput(
+            entities=[
+                LLMContextEntity(
+                    entity_type="candidate",
+                    name="Peter",
+                    explicit_or_inferred="explicit",
+                    confidence="high",
+                    source_references=[
+                        LLMSourceReference(chunk_id=chunk.id, excerpt="Peter")
+                    ],
+                    rationale="Named in the source.",
+                ),
+                LLMContextEntity(
+                    entity_type="skill",
+                    name="Python",
+                    explicit_or_inferred="explicit",
+                    confidence="high",
+                    source_references=[
+                        LLMSourceReference(chunk_id=chunk.id, excerpt="Python")
+                    ],
+                    rationale="Named in the source.",
+                ),
+            ],
+            relationships=[
+                LLMContextRelationship(
+                    relationship_type="has_skill",
+                    source_entity_name="Peter",
+                    target_entity_name="Python",
+                    explicit_or_inferred="explicit",
+                    confidence="high",
+                    source_references=[
+                        LLMSourceReference(chunk_id=chunk.id, excerpt="Peter Python")
+                    ],
+                    rationale="Both entities are connected in the source.",
+                ),
+                LLMContextRelationship(
+                    relationship_type="has_skill",
+                    source_entity_name="Peter",
+                    target_entity_name="Go",
+                    explicit_or_inferred="inferred",
+                    confidence="low",
+                    source_references=[
+                        LLMSourceReference(chunk_id=chunk.id, excerpt="Peter")
+                    ],
+                    rationale="Unresolved target.",
+                ),
+            ],
+        ),
+        artifact,
+        [chunk],
+        step,
+    )
+
+    assert len(result.relationships) == 1
+    relationship = result.relationships[0]
+    assert relationship.source_entity_id == result.entities[0].id
+    assert relationship.target_entity_id == result.entities[1].id
+    assert relationship.metadata["source_entity_name"] == "Peter"
+    assert relationship.metadata["target_entity_name"] == "Python"
+    assert "Dropped relationship" in result.metadata["warnings"][0]
+
+
+def test_context_graph_signal_selection_requires_configured_types(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    warnings: list[str] = []
+    monkeypatch.setattr(
+        "app.domains.job_search.llm.logger.warning",
+        lambda message, *args: warnings.append(
+            str(message) % args if args else str(message)
+        ),
+    )
+    context = build_selection_context()
+
+    selected = _select_perspective_signals(
+        context,
+        PerspectiveContextGraph.model_validate(
+            {"nodes": {"signals": {"types": ["technical_skill"]}}}
+        ),
+    )
+    missing = _select_perspective_signals(
+        context,
+        PerspectiveContextGraph.model_validate({"nodes": {"signals": {}}}),
+    )
+
+    assert [signal.signal_type for signal in selected] == ["technical_skill"]
+    assert missing == []
+    assert any("no signal types configured" in warning for warning in warnings)
+
+
+def test_context_graph_chunks_follow_dependencies_and_fallback() -> None:
+    context = build_selection_context()
+    deterministic = PerspectiveView(
+        view_definition_id="role_fit",
+        title="Role Fit",
+        sections=[
+            ViewSection(
+                id="evidence",
+                title="Evidence",
+                evidence_links=[
+                    EvidenceLink(source=context.chunks[1].source_link),
+                ],
+            )
+        ],
+    )
+    graph = PerspectiveContextGraph.model_validate(
+        {
+            "limits": {"chunks": 3},
+            "nodes": {
+                "signals": {"types": ["technical_skill"]},
+                "actionable_items": {"types": ["prepare_interview_brief"]},
+                "artifacts": {"types": ["job_description"]},
+                "chunks": {
+                    "depends_on": ["deterministic_view", "signals"],
+                    "fallback_artifact_types": ["job_description"],
+                },
+            },
+        }
+    )
+
+    selected = _select_perspective_chunks(context, deterministic, graph)
+
+    assert [chunk.id for chunk in selected] == ["chunk_resume", "chunk_jd"]
+
+
+def test_perspective_prompt_includes_artifact_level_actionable_items() -> None:
+    context = build_selection_context()
+    deterministic = PerspectiveView(
+        view_definition_id="role_fit",
+        title="Role Fit",
+        sections=[],
+    )
+    graph = PerspectiveContextGraph.model_validate(
+        {
+            "limits": {"chunks": 3, "actionable_items": 3},
+            "nodes": {
+                "signals": {"types": ["technical_skill"]},
+                "actionable_items": {"types": ["prepare_interview_brief"]},
+                "artifacts": {"types": ["job_description"]},
+                "chunks": {
+                    "depends_on": ["signals", "actionable_items"],
+                    "fallback_artifact_types": ["job_description"],
+                },
+            },
+        }
+    )
+
+    prompt, _prompt_ids = _perspective_prompt(context, deterministic, graph)
+    payload = json.loads(prompt)
+
+    assert [item["type"] for item in payload["actionable_items"]] == [
+        "prepare_interview_brief"
+    ]
+    assert payload["actionable_items"][0]["source_links"][0]["chunk_id"] is None
+    assert payload["actionable_items"][0]["source_links"][0]["artifact_id"] == "a1"
+
+
+def test_context_graph_for_view_fails_when_view_is_missing() -> None:
+    with pytest.raises(ValueError, match="not configured"):
+        _context_graph_for_view([], "missing")
+
+
+def build_artifact_and_chunk() -> tuple[Artifact, ArtifactChunk]:
+    """Build one source artifact and chunk for mapper tests."""
+    artifact = Artifact(
+        id="art_test",
+        domain_id="job_search",
+        artifact_type_id="resume",
+        owner_type=OwnerType.INVITATION_CODE,
+        owner_id="invite-llm",
+        title="Resume",
+        text="Peter Python",
+    )
+    chunk = ArtifactChunk(
+        id="chunk_test",
+        artifact_id=artifact.id,
+        chunk_index=0,
+        text=artifact.text,
+        start_offset=0,
+        end_offset=len(artifact.text),
+        source_link=SourceLink(
+            artifact_id=artifact.id,
+            chunk_id="chunk_test",
+            start_offset=0,
+            end_offset=len(artifact.text),
+            label="resume",
+            excerpt=artifact.text,
+        ),
+    )
+    return artifact, chunk
+
+
+def build_selection_context() -> PerspectiveBuildContext:
+    """Build context with multiple selectable source shapes."""
+    job = Artifact(
+        id="art_jd",
+        domain_id="job_search",
+        artifact_type_id="job_description",
+        owner_type=OwnerType.INVITATION_CODE,
+        owner_id="invite-llm",
+        title="Job",
+        text="Need Python",
+    )
+    resume = Artifact(
+        id="art_resume",
+        domain_id="job_search",
+        artifact_type_id="resume",
+        owner_type=OwnerType.INVITATION_CODE,
+        owner_id="invite-llm",
+        title="Resume",
+        text="Built Python systems",
+    )
+    job_chunk = ArtifactChunk(
+        id="chunk_jd",
+        artifact_id=job.id,
+        chunk_index=0,
+        text=job.text,
+        start_offset=0,
+        end_offset=len(job.text),
+        source_link=SourceLink(
+            artifact_id=job.id,
+            chunk_id="chunk_jd",
+            excerpt=job.text,
+        ),
+    )
+    resume_chunk = ArtifactChunk(
+        id="chunk_resume",
+        artifact_id=resume.id,
+        chunk_index=0,
+        text=resume.text,
+        start_offset=0,
+        end_offset=len(resume.text),
+        source_link=SourceLink(
+            artifact_id=resume.id,
+            chunk_id="chunk_resume",
+            excerpt=resume.text,
+        ),
+    )
+    return PerspectiveBuildContext(
+        domain_id="job_search",
+        owner_type=OwnerType.INVITATION_CODE,
+        owner_id="invite-llm",
+        artifacts=[job, resume],
+        chunks=[job_chunk, resume_chunk],
+        signals=[
+            ContextSignal(
+                id="signal_skill",
+                signal_type="technical_skill",
+                label="Python",
+                value="Python",
+                source_links=[resume_chunk.source_link],
+            ),
+            ContextSignal(
+                id="signal_company",
+                signal_type="company_signal",
+                label="Mission",
+                value="Mission",
+                source_links=[job_chunk.source_link],
+            ),
+        ],
+        actionable_items=[
+            ActionableItem(
+                id="item_prepare",
+                item_type="prepare_interview_brief",
+                title="Prepare brief",
+                readiness_status=ReadinessStatus.NEEDS_REVIEW,
+                source_links=[
+                    SourceLink(
+                        artifact_id=job.id,
+                        chunk_id=None,
+                        label="job_description",
+                        excerpt=job.text,
+                    )
+                ],
+            )
+        ],
     )

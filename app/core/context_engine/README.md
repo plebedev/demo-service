@@ -22,3 +22,8 @@ Core source-grounding expectations are generic: derived records need
 `SourceLink`/`EvidenceLink` references, and storage rejects durable entities,
 relationships, signals, and actionable items without source links. Domain packs
 may add stricter validation before output is persisted.
+
+Domain packs may also declare context dependency graphs for their own
+perspectives. The core remains neutral: it provides owner-scoped artifacts,
+chunks, signals, and actionable items, while the domain decides which of those
+records belong in a model-backed synthesis step.

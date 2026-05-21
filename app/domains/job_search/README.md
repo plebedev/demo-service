@@ -10,6 +10,13 @@ The pack now runs in deterministic, LLM, or hybrid mode:
 - LLM-assisted wrappers in `llm.py` call generic Context Engine execution
   contracts and map structured output to `ContextSignal`, `PerspectiveView`, and
   `ActionableItem`.
+- Perspective synthesis uses declarative context dependency graphs in
+  `domain.yaml`. Each view declares the artifact, signal, actionable-item, and
+  chunk dependencies it needs, plus token/item limits.
+- Actionable items can enter perspective synthesis through chunk-level or
+  artifact-level source links. Task-generator items that point at a whole
+  artifact are included when that artifact is represented in the selected
+  context packet.
 - prompts live in `prompts/` and require source references, confidence,
   explicit-vs-inferred labels, and rationale.
 

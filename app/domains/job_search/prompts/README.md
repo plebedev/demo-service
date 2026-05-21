@@ -16,3 +16,9 @@ Templates:
 All prompts require source references, confidence labels, explicit-vs-inferred
 classification, and rationale. Job requirements must remain role expectations
 unless candidate-owned source evidence supports treating them as user strengths.
+
+Perspective prompts receive a bounded context packet selected by the view's
+declarative dependency graph in `../domain.yaml`. Persisted ids are compacted
+for the model call and remapped back after structured output validation.
+The context packet may include source links at chunk or artifact granularity;
+model outputs that make new evidence claims still need chunk ids.

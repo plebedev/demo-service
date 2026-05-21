@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Literal, cast
@@ -38,11 +39,49 @@ from app.core.context_engine.models import (
 
 ConfidenceLabel = Literal["low", "medium", "high"]
 EvidenceKind = Literal["explicit", "inferred"]
-_PERSPECTIVE_CHUNK_TEXT_LIMIT = 900
-_PERSPECTIVE_SOURCE_EXCERPT_LIMIT = 300
-_PERSPECTIVE_SIGNAL_LIMIT = 24
-_PERSPECTIVE_ACTIONABLE_ITEM_LIMIT = 6
-_PERSPECTIVE_CHUNK_LIMIT = 18
+logger = logging.getLogger(__name__)
+
+
+class PerspectiveContextLimits(BaseModel):
+    """Token and item limits for one perspective context graph."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    chunks: int = Field(default=18, ge=1)
+    signals: int = Field(default=24, ge=0)
+    actionable_items: int = Field(default=6, ge=0)
+    chunk_chars: int = Field(default=900, ge=1)
+    source_excerpt_chars: int = Field(default=300, ge=1)
+
+
+class PerspectiveContextNode(BaseModel):
+    """One node in a declarative perspective context graph."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    types: list[str] = Field(default_factory=list)
+    depends_on: list[str] = Field(default_factory=list)
+    fallback_artifact_types: list[str] = Field(default_factory=list)
+
+
+class PerspectiveContextGraph(BaseModel):
+    """Declarative context dependencies for one perspective."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    limits: PerspectiveContextLimits = Field(default_factory=PerspectiveContextLimits)
+    nodes: dict[str, PerspectiveContextNode] = Field(default_factory=dict)
+
+    def node(self, name: str) -> PerspectiveContextNode:
+        """Return a configured node or an empty node."""
+        return self.nodes.get(name, PerspectiveContextNode())
+
+    def require_node_types(self, name: str) -> None:
+        """Fail clearly when a selection node is missing explicit types."""
+        if not self.node(name).types:
+            raise ValueError(
+                f"Perspective context graph node '{name}' must declare explicit types."
+            )
 
 
 class LLMSourceReference(BaseModel):
@@ -219,6 +258,9 @@ class LLMAssistedPerspectiveBuilder:
     """Wrap a deterministic perspective builder with optional LLM synthesis."""
 
     base: PerspectiveBuilder
+    context_graph: PerspectiveContextGraph = field(
+        default_factory=PerspectiveContextGraph
+    )
 
     @property
     def id(self) -> str:
@@ -249,7 +291,9 @@ class LLMAssistedPerspectiveBuilder:
             )
             if step.mode == ContextExecutionMode.DETERMINISTIC:
                 return deterministic
-            prompt, prompt_ids = _perspective_prompt(context, deterministic)
+            prompt, prompt_ids = _perspective_prompt(
+                context, deterministic, self.context_graph
+            )
             output = execution_context.run_structured(
                 step=step,
                 instructions=execution_context.load_prompt(step),
@@ -412,8 +456,11 @@ def _map_extraction_output(
     step: ResolvedContextModelStep,
 ) -> ExtractionResult:
     metadata = metadata_for_generated_step(step)
-    entities = [
-        ContextEntity(
+    warnings = list(output.warnings)
+    entities: list[ContextEntity] = []
+    entity_ids_by_name: dict[str, str] = {}
+    for item in output.entities:
+        entity = ContextEntity(
             entity_type=item.entity_type,
             name=item.name,
             source_links=_source_links(item.source_references, chunks, artifact),
@@ -424,8 +471,8 @@ def _map_extraction_output(
                 "rationale": item.rationale,
             },
         )
-        for item in output.entities
-    ]
+        entities.append(entity)
+        entity_ids_by_name[_normalize_entity_name(item.name)] = entity.id
     signals = [
         ContextSignal(
             signal_type=item.signal_type,
@@ -442,21 +489,39 @@ def _map_extraction_output(
         )
         for item in output.signals
     ]
-    relationships = [
-        ContextRelationship(
-            relationship_type=item.relationship_type,
-            source_entity_id=item.source_entity_name,
-            target_entity_id=item.target_entity_name,
-            source_links=_source_links(item.source_references, chunks, artifact),
-            metadata={
-                **metadata,
-                "explicit_or_inferred": item.explicit_or_inferred,
-                "confidence": item.confidence,
-                "rationale": item.rationale,
-            },
+    relationships = []
+    for relationship_item in output.relationships:
+        source_entity_id = entity_ids_by_name.get(
+            _normalize_entity_name(relationship_item.source_entity_name)
         )
-        for item in output.relationships
-    ]
+        target_entity_id = entity_ids_by_name.get(
+            _normalize_entity_name(relationship_item.target_entity_name)
+        )
+        if source_entity_id is None or target_entity_id is None:
+            warnings.append(
+                "Dropped relationship with unresolved entity names: "
+                f"{relationship_item.source_entity_name!r} -> "
+                f"{relationship_item.target_entity_name!r}."
+            )
+            continue
+        relationships.append(
+            ContextRelationship(
+                relationship_type=relationship_item.relationship_type,
+                source_entity_id=source_entity_id,
+                target_entity_id=target_entity_id,
+                source_links=_source_links(
+                    relationship_item.source_references, chunks, artifact
+                ),
+                metadata={
+                    **metadata,
+                    "source_entity_name": relationship_item.source_entity_name,
+                    "target_entity_name": relationship_item.target_entity_name,
+                    "explicit_or_inferred": relationship_item.explicit_or_inferred,
+                    "confidence": relationship_item.confidence,
+                    "rationale": relationship_item.rationale,
+                },
+            )
+        )
     actionable_items = _map_actionable_items(
         output.actionable_items, chunks, artifact, step
     )
@@ -465,7 +530,7 @@ def _map_extraction_output(
         relationships=relationships,
         signals=signals,
         actionable_items=actionable_items,
-        metadata={"generated_by": "llm", "warnings": output.warnings},
+        metadata={"generated_by": "llm", "warnings": warnings},
     )
 
 
@@ -583,25 +648,28 @@ def _artifact_extraction_prompt(artifact: Artifact, chunks: list[ArtifactChunk])
 
 
 def _perspective_prompt(
-    context: PerspectiveBuildContext, deterministic: PerspectiveView
+    context: PerspectiveBuildContext,
+    deterministic: PerspectiveView,
+    context_graph: PerspectiveContextGraph,
 ) -> tuple[str, "_PromptIdMap"]:
     prompt_ids = _PromptIdMap()
-    selected_chunks = _select_perspective_chunks(context, deterministic)
+    selected_chunks = _select_perspective_chunks(context, deterministic, context_graph)
     selected_chunk_ids = {chunk.id for chunk in selected_chunks}
+    selected_artifact_ids = {chunk.artifact_id for chunk in selected_chunks}
     selected_signals = [
         signal
-        for signal in _select_perspective_signals(
-            context, deterministic.view_definition_id
+        for signal in _select_perspective_signals(context, context_graph)
+        if _has_selected_source(
+            signal.source_links, selected_chunk_ids, selected_artifact_ids
         )
-        if _has_selected_source(signal.source_links, selected_chunk_ids)
-    ][:_PERSPECTIVE_SIGNAL_LIMIT]
+    ][: context_graph.limits.signals]
     selected_items = [
         item
-        for item in _select_perspective_actionable_items(
-            context, deterministic.view_definition_id
+        for item in _select_perspective_actionable_items(context, context_graph)
+        if _has_selected_source(
+            item.source_links, selected_chunk_ids, selected_artifact_ids
         )
-        if _has_selected_source(item.source_links, selected_chunk_ids)
-    ][:_PERSPECTIVE_ACTIONABLE_ITEM_LIMIT]
+    ][: context_graph.limits.actionable_items]
     prompt = json.dumps(
         {
             "perspective_id": deterministic.view_definition_id,
@@ -614,19 +682,26 @@ def _perspective_prompt(
                 "max_evidence_references_per_section": 3,
                 "max_actionable_implications_per_section": 3,
             },
-            "deterministic_view": _compact_view(deterministic, prompt_ids),
+            "deterministic_view": _compact_view(
+                deterministic, prompt_ids, context_graph.limits
+            ),
             "artifacts": [
                 _compact_artifact(artifact, prompt_ids)
                 for artifact in _artifacts_for_chunks(
                     context.artifacts, selected_chunks
                 )
             ],
-            "chunks": [_compact_chunk(chunk, prompt_ids) for chunk in selected_chunks],
+            "chunks": [
+                _compact_chunk(chunk, prompt_ids, context_graph.limits)
+                for chunk in selected_chunks
+            ],
             "signals": [
-                _compact_signal(signal, prompt_ids) for signal in selected_signals
+                _compact_signal(signal, prompt_ids, context_graph.limits)
+                for signal in selected_signals
             ],
             "actionable_items": [
-                _compact_actionable_item(item, prompt_ids) for item in selected_items
+                _compact_actionable_item(item, prompt_ids, context_graph.limits)
+                for item in selected_items
             ],
         },
         indent=2,
@@ -693,132 +768,83 @@ class _PromptIdMap:
 
 
 def _select_perspective_chunks(
-    context: PerspectiveBuildContext, deterministic: PerspectiveView
+    context: PerspectiveBuildContext,
+    deterministic: PerspectiveView,
+    context_graph: PerspectiveContextGraph,
 ) -> list[ArtifactChunk]:
     """Return bounded chunks relevant to a single perspective."""
     chunks_by_id = {chunk.id: chunk for chunk in context.chunks}
+    chunks_node = context_graph.node("chunks")
     selected_ids: list[str] = []
-    for section in deterministic.sections:
-        for evidence in section.evidence_links:
-            if evidence.source.chunk_id:
-                selected_ids.append(evidence.source.chunk_id)
-    for signal in _select_perspective_signals(
-        context, deterministic.view_definition_id
-    ):
-        for link in signal.source_links:
-            if link.chunk_id:
-                selected_ids.append(link.chunk_id)
-    for item in _select_perspective_actionable_items(
-        context, deterministic.view_definition_id
-    ):
-        for link in item.source_links:
-            if link.chunk_id:
-                selected_ids.append(link.chunk_id)
+    if "deterministic_view" in chunks_node.depends_on:
+        for section in deterministic.sections:
+            for evidence in section.evidence_links:
+                if evidence.source.chunk_id:
+                    selected_ids.append(evidence.source.chunk_id)
+    if "signals" in chunks_node.depends_on:
+        for signal in _select_perspective_signals(context, context_graph):
+            for link in signal.source_links:
+                if link.chunk_id:
+                    selected_ids.append(link.chunk_id)
+    if "actionable_items" in chunks_node.depends_on:
+        for item in _select_perspective_actionable_items(context, context_graph):
+            for link in item.source_links:
+                if link.chunk_id:
+                    selected_ids.append(link.chunk_id)
     selected = _dedupe_chunks(
         chunks_by_id[chunk_id] for chunk_id in selected_ids if chunk_id in chunks_by_id
     )
-    if len(selected) < _PERSPECTIVE_CHUNK_LIMIT:
+    if len(selected) < context_graph.limits.chunks:
+        fallback_artifact_types = (
+            chunks_node.fallback_artifact_types or context_graph.node("artifacts").types
+        )
         selected.extend(
             chunk
             for chunk in context.chunks
             if chunk not in selected
-            and _artifact_type_for_chunk(context, chunk)
-            in _perspective_artifact_types(deterministic.view_definition_id)
+            and _artifact_type_for_chunk(context, chunk) in fallback_artifact_types
         )
-    return _dedupe_chunks(selected)[:_PERSPECTIVE_CHUNK_LIMIT]
+    return _dedupe_chunks(selected)[: context_graph.limits.chunks]
 
 
 def _select_perspective_signals(
-    context: PerspectiveBuildContext, perspective_id: str
+    context: PerspectiveBuildContext, context_graph: PerspectiveContextGraph
 ) -> list[ContextSignal]:
     """Return signals relevant to a single job_search perspective."""
-    keywords = _perspective_keywords(perspective_id)
+    configured_types = set(context_graph.node("signals").types)
+    if not configured_types:
+        logger.warning("Perspective context graph has no signal types configured.")
+        return []
     return [
-        signal
-        for signal in context.signals
-        if _matches_keywords(
-            " ".join(
-                [
-                    signal.signal_type,
-                    signal.label,
-                    str(signal.value or ""),
-                    json.dumps(signal.metadata, default=str),
-                ]
-            ),
-            keywords,
-        )
+        signal for signal in context.signals if signal.signal_type in configured_types
     ]
 
 
 def _select_perspective_actionable_items(
-    context: PerspectiveBuildContext, perspective_id: str
+    context: PerspectiveBuildContext, context_graph: PerspectiveContextGraph
 ) -> list[ActionableItem]:
     """Return actionable items relevant to a single job_search perspective."""
-    keywords = _perspective_keywords(perspective_id)
-    return [
-        item
-        for item in context.actionable_items
-        if _matches_keywords(
-            " ".join([item.item_type, item.title, item.description or ""]),
-            keywords,
+    configured_types = set(context_graph.node("actionable_items").types)
+    if not configured_types:
+        logger.warning(
+            "Perspective context graph has no actionable item types configured."
         )
+        return []
+    return [
+        item for item in context.actionable_items if item.item_type in configured_types
     ]
 
 
-def _perspective_keywords(perspective_id: str) -> tuple[str, ...]:
-    """Return simple domain-owned relevance hints for one perspective."""
-    if perspective_id == "role_fit":
-        return (
-            "requirement",
-            "expectation",
-            "strength",
-            "skill",
-            "fit",
-            "gap",
-            "risk",
-            "scope",
-            "leadership",
-            "evidence",
-        )
-    if perspective_id == "interview_prep":
-        return ("interview", "story", "theme", "weak", "question", "prepare")
-    if perspective_id == "resume_positioning":
-        return ("resume", "rewrite", "position", "claim", "emphasize", "missing")
-    if perspective_id == "compensation_scope_risk":
-        return ("compensation", "scope", "title", "risk", "senior", "director")
-    if perspective_id == "application_pipeline":
-        return ("pipeline", "next", "block", "delegate", "outreach", "apply")
-    return ()
-
-
-def _perspective_artifact_types(perspective_id: str) -> tuple[str, ...]:
-    """Return artifact types useful for one perspective."""
-    if perspective_id == "role_fit":
-        return ("job_description", "resume", "personal_story")
-    if perspective_id == "interview_prep":
-        return ("job_description", "resume", "personal_story", "company_research")
-    if perspective_id == "resume_positioning":
-        return ("job_description", "resume", "personal_story")
-    if perspective_id == "compensation_scope_risk":
-        return ("job_description", "company_research")
-    if perspective_id == "application_pipeline":
-        return ("job_description", "company_research", "resume")
-    return ("job_description", "resume", "personal_story", "company_research")
-
-
-def _matches_keywords(value: str, keywords: tuple[str, ...]) -> bool:
-    """Return whether text matches any relevance hint."""
-    if not keywords:
-        return True
-    normalized = value.lower()
-    return any(keyword in normalized for keyword in keywords)
-
-
 def _has_selected_source(
-    source_links: list[SourceLink], selected_chunk_ids: set[str]
+    source_links: list[SourceLink],
+    selected_chunk_ids: set[str],
+    selected_artifact_ids: set[str],
 ) -> bool:
-    """Return whether a context item is grounded in selected chunks."""
-    return any(link.chunk_id in selected_chunk_ids for link in source_links)
+    """Return whether a context item is grounded in selected context."""
+    return any(
+        link.chunk_id in selected_chunk_ids or link.artifact_id in selected_artifact_ids
+        for link in source_links
+    )
 
 
 def _artifact_type_for_chunk(
@@ -860,19 +886,23 @@ def _compact_artifact(
 
 
 def _compact_chunk(
-    chunk: ArtifactChunk, prompt_ids: _PromptIdMap
+    chunk: ArtifactChunk,
+    prompt_ids: _PromptIdMap,
+    limits: PerspectiveContextLimits,
 ) -> dict[str, str | int]:
     """Return token-light source chunk content."""
     return {
         "id": prompt_ids.chunk_id(chunk.id),
         "artifact_id": prompt_ids.artifact_id(chunk.artifact_id),
         "index": chunk.chunk_index,
-        "text": chunk.text[:_PERSPECTIVE_CHUNK_TEXT_LIMIT],
+        "text": chunk.text[: limits.chunk_chars],
     }
 
 
 def _compact_signal(
-    signal: ContextSignal, prompt_ids: _PromptIdMap
+    signal: ContextSignal,
+    prompt_ids: _PromptIdMap,
+    limits: PerspectiveContextLimits,
 ) -> dict[str, object]:
     """Return token-light signal content."""
     return {
@@ -880,13 +910,15 @@ def _compact_signal(
         "type": signal.signal_type,
         "label": signal.label,
         "value": signal.value,
-        "source_links": _compact_source_links(signal.source_links, prompt_ids),
+        "source_links": _compact_source_links(signal.source_links, prompt_ids, limits),
         "metadata": _compact_metadata(signal.metadata),
     }
 
 
 def _compact_actionable_item(
-    item: ActionableItem, prompt_ids: _PromptIdMap
+    item: ActionableItem,
+    prompt_ids: _PromptIdMap,
+    limits: PerspectiveContextLimits,
 ) -> dict[str, object]:
     """Return token-light actionable item content."""
     return {
@@ -895,11 +927,15 @@ def _compact_actionable_item(
         "title": item.title,
         "description": item.description,
         "readiness": item.readiness_status.value,
-        "source_links": _compact_source_links(item.source_links, prompt_ids),
+        "source_links": _compact_source_links(item.source_links, prompt_ids, limits),
     }
 
 
-def _compact_view(view: PerspectiveView, prompt_ids: _PromptIdMap) -> dict[str, object]:
+def _compact_view(
+    view: PerspectiveView,
+    prompt_ids: _PromptIdMap,
+    limits: PerspectiveContextLimits,
+) -> dict[str, object]:
     """Return token-light deterministic view content."""
     return {
         "id": view.view_definition_id,
@@ -911,7 +947,9 @@ def _compact_view(view: PerspectiveView, prompt_ids: _PromptIdMap) -> dict[str, 
                 "content": section.content,
                 "evidence_links": [
                     {
-                        "source": _compact_source_link(evidence.source, prompt_ids),
+                        "source": _compact_source_link(
+                            evidence.source, prompt_ids, limits
+                        ),
                         "confidence": evidence.confidence,
                         "note": evidence.note,
                     }
@@ -924,21 +962,29 @@ def _compact_view(view: PerspectiveView, prompt_ids: _PromptIdMap) -> dict[str, 
 
 
 def _compact_source_links(
-    links: list[SourceLink], prompt_ids: _PromptIdMap
+    links: list[SourceLink],
+    prompt_ids: _PromptIdMap,
+    limits: PerspectiveContextLimits,
 ) -> list[dict[str, object]]:
     """Return compact source references."""
-    return [_compact_source_link(link, prompt_ids) for link in links if link.chunk_id]
+    return [
+        _compact_source_link(link, prompt_ids, limits)
+        for link in links
+        if link.chunk_id or link.artifact_id
+    ]
 
 
 def _compact_source_link(
-    link: SourceLink, prompt_ids: _PromptIdMap
+    link: SourceLink,
+    prompt_ids: _PromptIdMap,
+    limits: PerspectiveContextLimits,
 ) -> dict[str, object]:
     """Return one compact source reference."""
     return {
         "artifact_id": prompt_ids.artifact_id(link.artifact_id),
         "chunk_id": prompt_ids.chunk_id(link.chunk_id) if link.chunk_id else None,
         "label": link.label,
-        "excerpt": (link.excerpt or "")[:_PERSPECTIVE_SOURCE_EXCERPT_LIMIT],
+        "excerpt": (link.excerpt or "")[: limits.source_excerpt_chars],
     }
 
 
@@ -953,3 +999,8 @@ def _compact_metadata(metadata: dict[str, object]) -> dict[str, object]:
         "reason",
     }
     return {key: value for key, value in metadata.items() if key in keys}
+
+
+def _normalize_entity_name(value: str) -> str:
+    """Normalize entity names for LLM relationship resolution."""
+    return " ".join(value.lower().split())

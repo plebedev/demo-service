@@ -68,6 +68,14 @@ def test_job_search_domain_registers_expected_extensions() -> None:
     assert pack.metadata["extractor_routing"]["company_research"] == [
         "career-context-notes-extractor"
     ]
+    role_fit = next(view for view in pack.view_definitions if view.id == "role_fit")
+    context_graph = role_fit.metadata["context_dependency_graph"]
+    assert context_graph["nodes"]["chunks"]["depends_on"] == [
+        "deterministic_view",
+        "signals",
+        "actionable_items",
+    ]
+    assert "job_description" in context_graph["nodes"]["artifacts"]["types"]
 
 
 def test_job_description_extraction_outputs_source_grounded_context() -> None:
