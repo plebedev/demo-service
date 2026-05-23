@@ -65,6 +65,7 @@ def create_voice_persona(
     instructions: str = "You are a workforce development advisor.",
     capabilities: str | None = "Helps employers assess workforce readiness.",
     tool_config: str | None = None,
+    tool_names: list[str] | None = None,
 ) -> int:
     """Create a voice persona and return its id."""
     response = client.post(
@@ -75,6 +76,7 @@ def create_voice_persona(
             "instructions": instructions,
             "capabilities": capabilities,
             "tool_config": tool_config,
+            "tool_names": tool_names,
         },
     )
     assert response.status_code == 201
@@ -249,6 +251,7 @@ def test_voice_persona_create_returns_201(client: TestClient) -> None:
             "instructions": "You are a workforce advisor.",
             "capabilities": "Workforce readiness assessment.",
             "tool_config": None,
+            "tool_names": ["record_answer", "end_conversation"],
         },
     )
     assert response.status_code == 201
@@ -257,8 +260,75 @@ def test_voice_persona_create_returns_201(client: TestClient) -> None:
     assert payload["instructions"] == "You are a workforce advisor."
     assert payload["capabilities"] == "Workforce readiness assessment."
     assert payload["tool_config"] is None
+    assert payload["tool_names"] == ["record_answer", "end_conversation"]
     assert payload["is_active"] is True
     assert payload["experience_id"] == "voice-demo"
+
+
+def test_voice_persona_rejects_unknown_tool_names(client: TestClient) -> None:
+    """POST /api/voice/personas rejects tools outside the voice registry."""
+    headers = voice_access_headers(client, "persona-bad-tool-code")
+    response = client.post(
+        "/api/voice/personas",
+        headers=headers,
+        json={
+            "name": "Bad Tool Advisor",
+            "instructions": "Use a missing tool.",
+            "tool_names": ["record_answer", "normalize_input"],
+        },
+    )
+
+    assert response.status_code == 400
+    assert "Unknown voice tool" in response.json()["detail"]
+
+
+def test_voice_persona_legacy_tool_names_default(
+    client: TestClient, db_session: Session
+) -> None:
+    """Personas without tool_names_json keep the legacy voice tool set."""
+    persona = VoicePersona(
+        experience_id="voice-demo",
+        name="Legacy Advisor",
+        name_key="legacy advisor",
+        instructions="Legacy instructions.",
+        tool_names_serialized=None,
+    )
+    db_session.add(persona)
+    db_session.commit()
+
+    headers = voice_access_headers(client, "persona-legacy-tools-code")
+    response = client.get("/api/voice/personas", headers=headers)
+
+    assert response.status_code == 200
+    payload = response.json()["personas"][0]
+    assert payload["tool_names"] == [
+        "assess_employer_readiness",
+        "end_conversation",
+        "record_answer",
+    ]
+
+
+def test_voice_persona_patch_round_trips_tool_names(client: TestClient) -> None:
+    """PATCH /api/voice/personas/{id} persists the selected tool list."""
+    headers = voice_access_headers(client, "persona-tool-patch-code")
+    persona_id = create_voice_persona(
+        client,
+        headers,
+        name="Tool Patch Advisor",
+        tool_names=["record_answer"],
+    )
+
+    response = client.patch(
+        f"/api/voice/personas/{persona_id}",
+        headers=headers,
+        json={"tool_names": ["prepare_meeting_context", "end_conversation"]},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["tool_names"] == [
+        "prepare_meeting_context",
+        "end_conversation",
+    ]
 
 
 def test_voice_persona_created_persona_appears_in_list(client: TestClient) -> None:
@@ -476,6 +546,33 @@ def test_admin_can_patch_persona(client: TestClient) -> None:
     assert patch_response.json()["instructions"] == "Updated via admin."
 
 
+def test_admin_persona_round_trips_tool_names(client: TestClient) -> None:
+    """Admin persona endpoints support explicit voice tool selection."""
+    create_response = client.post(
+        "/api/internal/admin/voice/experiences/voice-demo/personas",
+        headers={"X-Admin-Secret": "test-admin-secret"},
+        json={
+            "name": "Admin Tool Persona",
+            "instructions": "Meeting prep.",
+            "tool_names": ["prepare_meeting_context", "end_conversation"],
+        },
+    )
+    assert create_response.status_code == 201
+    assert create_response.json()["tool_names"] == [
+        "prepare_meeting_context",
+        "end_conversation",
+    ]
+
+    persona_id = create_response.json()["id"]
+    patch_response = client.patch(
+        f"/api/internal/admin/voice/experiences/voice-demo/personas/{persona_id}",
+        headers={"X-Admin-Secret": "test-admin-secret"},
+        json={"tool_names": ["record_answer"]},
+    )
+    assert patch_response.status_code == 200
+    assert patch_response.json()["tool_names"] == ["record_answer"]
+
+
 def test_admin_can_deactivate_persona(client: TestClient) -> None:
     """Admin deactivate sets is_active=False."""
     create_response = client.post(
@@ -563,6 +660,117 @@ def test_voice_registry_scope_excludes_workflow_tools() -> None:
     assert {entry.name for entry in registry.resolve()} == set(VOICE_TOOL_NAMES)
     with pytest.raises(KeyError, match="Unknown tool"):
         registry.get("normalize_input")
+
+
+def test_voice_tools_endpoint_lists_meeting_prep_tool(client: TestClient) -> None:
+    """GET /api/voice/tools returns discoverable voice tool metadata."""
+    headers = voice_access_headers(client, "voice-tools-code")
+
+    response = client.get("/api/voice/tools", headers=headers)
+
+    assert response.status_code == 200
+    tools = response.json()["tools"]
+    meeting_tool = next(t for t in tools if t["name"] == "prepare_meeting_context")
+    assert meeting_tool["is_terminal"] is False
+    assert "live web lookup" in meeting_tool["description"].lower()
+
+
+def test_prepare_meeting_context_tool_returns_limitations(monkeypatch) -> None:
+    """Meeting prep output is structured and explicit about no live lookup."""
+    from app.services.tool_registry import build_tool_registry
+    from app.services.voice import tools as voice_tools
+
+    monkeypatch.setattr(
+        voice_tools,
+        "_generate_meeting_prep_context",
+        lambda input, tool_config: {
+            "summary": "Use a partnership framing for Acme.",
+            "talking_points": ["Lead with shared outcomes."],
+            "watchout": "Do not imply verified current news.",
+            "recommended_next_question": "What would make this meeting successful?",
+        },
+    )
+
+    registry = build_tool_registry()
+    raw = registry.execute_json(
+        "prepare_meeting_context",
+        {"company_name": "Acme", "meeting_purpose": "partnership discussion"},
+        {},
+    )
+    payload = json.loads(raw)
+
+    assert payload["company_name"] == "Acme"
+    assert payload["meeting_purpose"] == "partnership discussion"
+    assert payload["talking_points"] == ["Lead with shared outcomes."]
+    assert "does not browse the web" in payload["limitations"]
+
+
+def test_async_tool_result_waits_for_response_done_when_active(monkeypatch) -> None:
+    """Async tool output is appended after the active response finishes."""
+    import asyncio
+
+    from app.api.routes import voice as voice_routes
+
+    order: list[str] = []
+
+    async def fake_execute_tool(entry, args, tool_config):
+        order.append("tool_started")
+        await asyncio.sleep(0)
+        return '{"status":"recorded"}'
+
+    monkeypatch.setattr(voice_routes, "_execute_voice_tool", fake_execute_tool)
+
+    class FakeVoiceClient:
+        def __init__(self) -> None:
+            self.events = [
+                {"type": "response.created", "response": {"id": "resp_1"}},
+                {
+                    "type": "response.function_call_arguments.done",
+                    "call_id": "call_1",
+                    "name": "record_answer",
+                    "arguments": json.dumps(
+                        {
+                            "question": "What is the meeting goal?",
+                            "user_response": "Partnership.",
+                            "derived_answer": "partnership",
+                        }
+                    ),
+                },
+                {"type": "response.done"},
+            ]
+
+        async def receive(self) -> dict:
+            if not self.events:
+                raise RuntimeError("done")
+            event = self.events.pop(0)
+            order.append(event["type"])
+            return event
+
+        async def send_tool_result(self, call_id: str, output: str) -> None:
+            order.append("send_tool_result")
+
+        async def cancel_response(self) -> None:
+            order.append("cancel_response")
+
+    class FakeWebSocket:
+        async def send_text(self, text: str) -> None:
+            order.append("ws_send_text")
+
+        async def close(self) -> None:
+            order.append("ws_close")
+
+    asyncio.run(
+        voice_routes._handle_xai_to_twilio(
+            FakeWebSocket(),
+            FakeVoiceClient(),
+            stream_sid_ref=["stream_1"],
+            call_sid_ref=["call_1"],
+            conv_ref=[None],
+            pending_tool_calls={},
+        )
+    )
+
+    assert order.index("response.done") < order.index("send_tool_result")
 
 
 def test_openai_voice_client_uses_ga_realtime_session_shape() -> None:

@@ -10,7 +10,7 @@ import json
 import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 
 from fastapi import (
     APIRouter,
@@ -48,6 +48,8 @@ from app.schemas.voice import (
     VoicePersonaUpdateRequest,
     VoiceProviderInfo,
     VoiceProvidersResponse,
+    VoiceToolInfo,
+    VoiceToolsResponse,
 )
 from app.services.voice.base_client import VoiceClient
 from app.services.voice.cost import estimate_cost
@@ -58,9 +60,15 @@ from app.services.tool_registry import ToolRegistry, build_tool_registry
 
 logger = logging.getLogger(__name__)
 
+LEGACY_VOICE_TOOL_NAMES = [
+    "assess_employer_readiness",
+    "end_conversation",
+    "record_answer",
+]
 VOICE_TOOL_NAMES = [
     "assess_employer_readiness",
     "end_conversation",
+    "prepare_meeting_context",
     "record_answer",
 ]
 
@@ -183,6 +191,7 @@ def _serialize_persona(persona: VoicePersona) -> VoicePersonaResponse:
         instructions=persona.instructions,
         capabilities=persona.capabilities_serialized,
         tool_config=persona.tool_config_serialized,
+        tool_names=_persona_tool_names(persona),
         is_active=persona.is_active,
         created_at=persona.created_at,
         updated_at=persona.updated_at,
@@ -202,23 +211,69 @@ def _serialize_config(cfg: VoiceExperienceConfig) -> VoiceExperienceConfigRespon
     )
 
 
-def _get_active_persona_or_503(db: Session, experience_id: str) -> VoicePersona:
-    """Return the first active persona for an experience, or raise 503."""
-    persona = (
-        db.query(VoicePersona)
-        .filter(
-            VoicePersona.experience_id == experience_id,
-            VoicePersona.is_active == True,
-        )
-        .order_by(VoicePersona.id)
-        .first()
+def _get_active_persona_or_503(
+    db: Session, experience_id: str, persona_id: int | None = None
+) -> VoicePersona:
+    """Return one active persona for an experience, or raise 503/404."""
+    query = db.query(VoicePersona).filter(
+        VoicePersona.experience_id == experience_id,
+        VoicePersona.is_active == True,
     )
+    if persona_id is not None:
+        persona = query.filter(VoicePersona.id == persona_id).first()
+        if persona is None:
+            raise HTTPException(status_code=404, detail="Persona not found.")
+        return persona
+    persona = query.order_by(VoicePersona.id).first()
     if persona is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="No active voice persona configured for this experience.",
         )
     return persona
+
+
+def _parse_tool_names(raw: str | None) -> list[str] | None:
+    if raw is None:
+        return None
+    try:
+        decoded = json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        logger.warning("Invalid tool_names_json; using legacy voice tools")
+        return None
+    if not isinstance(decoded, list) or not all(
+        isinstance(item, str) for item in decoded
+    ):
+        logger.warning("Invalid tool_names_json shape; using legacy voice tools")
+        return None
+    return decoded
+
+
+def _persona_tool_names(persona: VoicePersona) -> list[str]:
+    parsed = _parse_tool_names(persona.tool_names_serialized)
+    if parsed is None:
+        return list(LEGACY_VOICE_TOOL_NAMES)
+    return parsed
+
+
+def _serialize_tool_names(tool_names: list[str] | None) -> str | None:
+    if tool_names is None:
+        return None
+    _validate_voice_tool_names(tool_names)
+    return json.dumps(tool_names)
+
+
+def _validate_voice_tool_names(tool_names: list[str]) -> None:
+    if len(tool_names) != len(set(tool_names)):
+        raise HTTPException(status_code=400, detail="Duplicate voice tool names.")
+    for tool_name in tool_names:
+        try:
+            _voice_tool_registry.get(tool_name)
+        except KeyError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unknown voice tool: {tool_name}",
+            ) from exc
 
 
 def _load_tool_config(persona: VoicePersona) -> dict[str, Any]:
@@ -232,6 +287,13 @@ def _load_tool_config(persona: VoicePersona) -> dict[str, Any]:
             "Invalid tool_config_json on persona %d; using empty config", persona.id
         )
         return {}
+
+
+async def _execute_voice_tool(
+    entry: Any, args: dict[str, Any], tool_config: dict[str, Any]
+) -> str:
+    """Execute a voice tool without blocking the realtime receive loop."""
+    return cast(str, await entry.execute_json_async(args, tool_config))
 
 
 def _validate_twilio_signature(
@@ -310,6 +372,7 @@ async def voice_inbound(
 async def voice_stream(
     websocket: WebSocket,
     token: str | None = Query(default=None),
+    persona_id: int | None = Query(default=None),
     settings: Settings = Depends(get_settings),
     db: Session = Depends(get_db_session),
 ) -> None:
@@ -366,6 +429,7 @@ async def voice_stream(
                     stream_sid_ref=stream_sid_ref,
                     conv_ref=conv_ref,
                     pending_tool_calls=pending_tool_calls,
+                    persona_id=persona_id,
                 )
             )
             output_task = asyncio.create_task(
@@ -442,6 +506,7 @@ async def _handle_twilio_messages(
     stream_sid_ref: list[str | None],
     conv_ref: list[ConversationAccumulator | None],
     pending_tool_calls: dict[str, dict[str, Any]],
+    persona_id: int | None = None,
 ) -> None:
     """Receive Twilio Media Streams events and forward audio to the voice provider."""
     async for raw in _ws_iter(ws):
@@ -458,7 +523,13 @@ async def _handle_twilio_messages(
             call_sid_ref[0] = call_sid
             stream_sid_ref[0] = start.get("streamSid", "")
 
-            persona = _get_active_persona_or_503(db, ExperienceId.VOICE_DEMO)
+            try:
+                persona = _get_active_persona_or_503(
+                    db, ExperienceId.VOICE_DEMO, persona_id=persona_id
+                )
+            except HTTPException as exc:
+                await ws.close(code=4004 if exc.status_code == 404 else 1011)
+                break
             voice_cfg = (
                 db.query(VoiceExperienceConfig)
                 .filter(VoiceExperienceConfig.experience_id == ExperienceId.VOICE_DEMO)
@@ -472,24 +543,26 @@ async def _handle_twilio_messages(
             )
             voice = _resolve_voice_name(voice_cfg, resolved_provider)
             tool_config = _load_tool_config(persona)
+            tool_names = _persona_tool_names(persona)
+            persona_tool_registry = _voice_tool_registry.scoped(tool_names)
             create_session(
                 session_id=call_sid,
                 experience_id=ExperienceId.VOICE_DEMO,
                 persona_id=persona.id,
                 persona_instructions=persona.instructions,
                 persona_tool_config=tool_config,
-                tool_registry=_voice_tool_registry,
+                tool_registry=persona_tool_registry,
             )
             conv_ref[0] = ConversationAccumulator(
                 started_at=datetime.now(UTC),
                 provider=resolved_provider,
                 voice=voice,
             )
-            tool_prompt = _voice_tool_registry.prompt_block() or ""
+            tool_prompt = persona_tool_registry.prompt_block() or ""
             instructions = _build_stream_instructions(persona, tool_prompt)
             await vc.configure_session(
                 instructions=instructions,
-                tools=_voice_tool_registry.tool_definitions(),
+                tools=persona_tool_registry.tool_definitions(),
                 voice=voice,
                 audio_format={"type": "audio/pcmu", "rate": 8000},
             )
@@ -526,6 +599,49 @@ async def _handle_xai_to_twilio(
     current_response_id: str | None = None
     cancelled_response_id: str | None = None
     response_active = False  # True only while a response is in progress
+    ready_tool_results: list[tuple[str, str]] = []
+    tool_result_lock = asyncio.Lock()
+    active_tool_tasks: set[asyncio.Task[None]] = set()
+
+    async def send_or_queue_tool_result(call_id: str, result: str) -> None:
+        to_send: list[tuple[str, str]] = []
+        async with tool_result_lock:
+            if response_active:
+                ready_tool_results.append((call_id, result))
+            else:
+                to_send.append((call_id, result))
+        for result_call_id, result_output in to_send:
+            await vc.send_tool_result(result_call_id, result_output)
+
+    async def flush_ready_tool_results() -> None:
+        async with tool_result_lock:
+            to_send = list(ready_tool_results)
+            ready_tool_results.clear()
+        for result_call_id, result_output in to_send:
+            await vc.send_tool_result(result_call_id, result_output)
+
+    async def run_tool_call(
+        call_id: str,
+        entry: Any,
+        args: dict[str, Any],
+        tool_config: dict[str, Any],
+    ) -> None:
+        try:
+            result = await _execute_voice_tool(entry, args, tool_config)
+        except Exception:
+            logger.exception(
+                "Voice tool execution failed: name=%s call_id=%s call=%s",
+                getattr(entry, "name", ""),
+                call_id,
+                call_sid_ref[0],
+            )
+            result = json.dumps(
+                {
+                    "error": "tool_execution_failed",
+                    "message": "The tool result was not available.",
+                }
+            )
+        await send_or_queue_tool_result(call_id, result)
 
     while True:
         try:
@@ -541,7 +657,8 @@ async def _handle_xai_to_twilio(
             resp_id = resp.get("id") if isinstance(resp, dict) else None
             if resp_id:
                 current_response_id = resp_id
-            response_active = True
+            async with tool_result_lock:
+                response_active = True
 
         elif event_type == "input_audio_buffer.speech_started":
             if response_active:
@@ -638,20 +755,28 @@ async def _handle_xai_to_twilio(
                         {"role": "tool_call", "tool_name": tool_name, "args": args}
                     )
                 try:
-                    entry = _voice_tool_registry.get(tool_name)
+                    session = get_session(call_sid_ref[0] or "")
+                    tool_registry = (
+                        session.tool_registry if session else _voice_tool_registry
+                    )
+                    entry = tool_registry.get(tool_name)
                 except KeyError:
                     logger.warning("Unknown tool: %s", tool_name)
                     continue
                 if entry.is_terminal:
                     close_after_response = True
                 else:
-                    session = get_session(call_sid_ref[0] or "")
                     tool_config = session.persona_tool_config if session else {}
-                    result = entry.execute_json(args, tool_config)
-                    await vc.send_tool_result(call_id, result)
+                    task = asyncio.create_task(
+                        run_tool_call(call_id, entry, args, tool_config)
+                    )
+                    active_tool_tasks.add(task)
+                    task.add_done_callback(active_tool_tasks.discard)
 
         elif event_type == "response.done":
-            response_active = False
+            async with tool_result_lock:
+                response_active = False
+            await flush_ready_tool_results()
             logger.info(
                 "response.done: close_after_response=%s call=%s",
                 close_after_response,
@@ -665,6 +790,13 @@ async def _handle_xai_to_twilio(
 
         elif event_type == "error":
             logger.error("Voice error event: %s", event.get("error", {}))
+
+    if active_tool_tasks:
+        await asyncio.gather(*list(active_tool_tasks), return_exceptions=True)
+    async with tool_result_lock:
+        response_is_idle = not response_active
+    if response_is_idle:
+        await flush_ready_tool_results()
 
 
 async def _ws_iter(ws: WebSocket):  # type: ignore[no-untyped-def]
@@ -721,6 +853,23 @@ def list_voice_providers(
                 voices=voices,
             )
             for pid, voices in _PROVIDER_VOICES.items()
+        ]
+    )
+
+
+@router.get("/tools", response_model=VoiceToolsResponse)
+def list_voice_tools(
+    claims: AccessTokenClaims = Depends(voice_access),
+) -> VoiceToolsResponse:
+    """Return voice tools that can be enabled per persona."""
+    return VoiceToolsResponse(
+        tools=[
+            VoiceToolInfo(
+                name=entry.name,
+                description=entry.description,
+                is_terminal=entry.is_terminal,
+            )
+            for entry in _voice_tool_registry.resolve(VOICE_TOOL_NAMES)
         ]
     )
 
@@ -857,6 +1006,7 @@ def create_voice_persona(
         instructions=payload.instructions,
         capabilities_serialized=payload.capabilities,
         tool_config_serialized=payload.tool_config,
+        tool_names_serialized=_serialize_tool_names(payload.tool_names),
         is_active=True,
     )
     db.add(persona)
@@ -886,6 +1036,8 @@ def update_voice_persona(
         persona.capabilities_serialized = payload.capabilities
     if payload.tool_config is not None:
         persona.tool_config_serialized = payload.tool_config
+    if payload.tool_names is not None:
+        persona.tool_names_serialized = _serialize_tool_names(payload.tool_names)  # type: ignore[assignment]
 
     db.commit()
     db.refresh(persona)
@@ -1053,6 +1205,7 @@ def admin_create_persona(
         instructions=payload.instructions,
         capabilities_serialized=payload.capabilities,
         tool_config_serialized=payload.tool_config,
+        tool_names_serialized=_serialize_tool_names(payload.tool_names),
         is_active=True,
     )
     db.add(persona)
@@ -1085,6 +1238,8 @@ def admin_update_persona(
         persona.capabilities_serialized = payload.capabilities
     if payload.tool_config is not None:
         persona.tool_config_serialized = payload.tool_config
+    if payload.tool_names is not None:
+        persona.tool_names_serialized = _serialize_tool_names(payload.tool_names)  # type: ignore[assignment]
 
     db.commit()
     db.refresh(persona)

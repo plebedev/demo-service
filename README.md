@@ -1098,6 +1098,19 @@ REVISION=1 task rollback
 - The backend currently expects the read/write user in production, such as `APP_RW`.
 - The starter schema uses generic SQLAlchemy types to avoid obvious cross-dialect issues, but you should still test future migrations against Oracle before relying on local Postgres behavior alone.
 
+## Voice Meeting Prep limitations
+
+The Meeting Prep voice tool is intentionally not a live research tool. It does
+not browse the web, verify current company facts, use private CRM/account data,
+or return source links. It uses the company name, meeting purpose, optional
+caller details, and general model knowledge to produce preparation hypotheses.
+
+This is a conscious demo trade-off: the feature demonstrates async Realtime
+tool-result injection and voice continuity while keeping external data
+dependencies out of scope. The advisor should say it is preparing context from
+what the user shared and general background knowledge, not that it looked up or
+verified current company information.
+
 ## Internal admin helper
 
 The VM-side invite management helper is [deploy/scripts/invitation-admin.sh](/Users/plebedev/github/demo/demo-service/deploy/scripts/invitation-admin.sh).

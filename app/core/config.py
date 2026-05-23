@@ -162,6 +162,15 @@ class Settings(BaseSettings):
     voice_greeting_model: str = Field(
         default="gpt-4o-mini", alias="VOICE_GREETING_MODEL"
     )
+    voice_meeting_prep_provider: str = Field(
+        default="openai", alias="VOICE_MEETING_PREP_PROVIDER"
+    )
+    voice_meeting_prep_model: str = Field(
+        default="gpt-4o-mini", alias="VOICE_MEETING_PREP_MODEL"
+    )
+    voice_meeting_prep_min_delay_seconds: float = Field(
+        default=4.0, alias="VOICE_MEETING_PREP_MIN_DELAY_SECONDS"
+    )
 
     @classmethod
     def settings_customise_sources(

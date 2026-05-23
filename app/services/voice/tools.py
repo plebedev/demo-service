@@ -3,11 +3,17 @@
 from __future__ import annotations
 
 from enum import StrEnum
+import json
+import logging
+import time
 from typing import Any
 
 from pydantic import BaseModel, Field
 
+from app.core.config import get_settings
 from app.services.tool_registry import ToolCategory, tool_decorator
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -166,9 +172,197 @@ class AssessEmployerReadinessOutput(BaseModel):
     )
 
 
+class PrepareMeetingContextInput(BaseModel):
+    """Meeting details used to prepare model-generated discussion context."""
+
+    company_name: str = Field(description="Company or organization name")
+    meeting_purpose: str = Field(
+        description="Purpose of the meeting, such as partnership discussion"
+    )
+    user_role: str = Field(
+        default="",
+        description="Optional role or perspective of the caller",
+    )
+    desired_outcome: str = Field(
+        default="",
+        description="Optional outcome the caller wants from the meeting",
+    )
+
+
+class PrepareMeetingContextOutput(BaseModel):
+    """Structured, voice-ready meeting prep context."""
+
+    company_name: str
+    meeting_purpose: str
+    summary: str
+    talking_points: list[str]
+    watchout: str
+    recommended_next_question: str
+    limitations: str
+
+
 # ---------------------------------------------------------------------------
 # Tool implementation
 # ---------------------------------------------------------------------------
+
+_MEETING_PREP_SYSTEM_PROMPT = (
+    "You prepare concise meeting guidance for a voice assistant demo. "
+    "Do not browse the web, imply live lookup, cite sources, or claim current facts. "
+    "Use only the company name, meeting purpose, caller details, and general model "
+    "knowledge. Frame company-specific content as unverified background or plausible "
+    "preparation hypotheses. Return strict JSON with keys: summary, talking_points, "
+    "watchout, recommended_next_question."
+)
+
+_MEETING_PREP_LIMITATIONS = (
+    "This meeting prep does not browse the web, verify current company facts, "
+    "or use private account data. It uses the details provided in the conversation "
+    "plus general model knowledge, so treat the guidance as preparation hypotheses "
+    "rather than live research."
+)
+
+
+@tool_decorator(
+    ToolCategory.READ_ONLY,
+    description=(
+        "Prepare meeting context from the company name and meeting purpose without "
+        "live web lookup, current-fact verification, or source-link claims."
+    ),
+    prompt_instructions=(
+        "Call prepare_meeting_context after the user names the company and meeting "
+        "purpose. Tell the user you are preparing context from what they shared and "
+        "general background knowledge, not looking it up live. While the result is "
+        "pending, continue asking useful generic meeting-prep questions. When the "
+        "result arrives, begin with 'I got the results for...' and ask the "
+        "recommended next question."
+    ),
+    input_model=PrepareMeetingContextInput,
+    output_model=PrepareMeetingContextOutput,
+)
+def prepare_meeting_context(
+    input: PrepareMeetingContextInput,  # noqa: A002
+    tool_config: dict[str, Any],
+) -> PrepareMeetingContextOutput:
+    """Generate meeting prep context without live lookup or freshness claims."""
+    settings = get_settings()
+    started_at = time.monotonic()
+    try:
+        generated = _generate_meeting_prep_context(input, tool_config)
+    except Exception:
+        logger.exception("Meeting prep context generation failed")
+        generated = _fallback_meeting_context(input)
+
+    min_delay = float(
+        tool_config.get(
+            "min_delay_seconds",
+            settings.voice_meeting_prep_min_delay_seconds,
+        )
+    )
+    remaining_delay = min_delay - (time.monotonic() - started_at)
+    if remaining_delay > 0:
+        time.sleep(remaining_delay)
+
+    fallback = _fallback_meeting_context(input)
+    talking_points = [
+        str(item).strip()
+        for item in generated.get("talking_points", [])
+        if str(item).strip()
+    ][:4]
+
+    return PrepareMeetingContextOutput(
+        company_name=input.company_name,
+        meeting_purpose=input.meeting_purpose,
+        summary=str(generated.get("summary", "")).strip() or fallback["summary"],
+        talking_points=talking_points or fallback["talking_points"],
+        watchout=str(generated.get("watchout", "")).strip() or fallback["watchout"],
+        recommended_next_question=str(
+            generated.get("recommended_next_question", "")
+        ).strip()
+        or fallback["recommended_next_question"],
+        limitations=_MEETING_PREP_LIMITATIONS,
+    )
+
+
+def _generate_meeting_prep_context(
+    input: PrepareMeetingContextInput,
+    tool_config: dict[str, Any],
+) -> dict[str, Any]:
+    settings = get_settings()
+    provider = str(
+        tool_config.get("provider", settings.voice_meeting_prep_provider)
+    ).lower()
+    model = str(tool_config.get("model", settings.voice_meeting_prep_model))
+    prompt = (
+        f"Company: {input.company_name}\n"
+        f"Meeting purpose: {input.meeting_purpose}\n"
+        f"Caller role: {input.user_role or 'Not provided'}\n"
+        f"Desired outcome: {input.desired_outcome or 'Not provided'}"
+    )
+
+    if provider == "openai":
+        from openai import OpenAI
+
+        if not settings.openai_api_key:
+            raise ValueError("OPENAI_API_KEY required for meeting prep context")
+        openai_client = OpenAI(api_key=settings.openai_api_key)
+        response = openai_client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": _MEETING_PREP_SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
+            ],
+            max_tokens=500,
+            temperature=0.4,
+            response_format={"type": "json_object"},
+        )
+        content = response.choices[0].message.content or "{}"
+        parsed: dict[str, Any] = json.loads(content)
+        return parsed
+
+    if provider == "anthropic":
+        from anthropic import Anthropic
+
+        if not settings.anthropic_api_key:
+            raise ValueError("ANTHROPIC_API_KEY required for meeting prep context")
+        anthropic_client = Anthropic(api_key=settings.anthropic_api_key)
+        anthropic_response = anthropic_client.messages.create(
+            model=model,
+            system=_MEETING_PREP_SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=500,
+        )
+        block = anthropic_response.content[0]
+        content = getattr(block, "text", "{}")
+        parsed = json.loads(content)
+        if isinstance(parsed, dict):
+            return parsed
+        return _fallback_meeting_context(input)
+
+    raise ValueError(f"Unsupported meeting prep provider: {provider}")
+
+
+def _fallback_meeting_context(
+    input: PrepareMeetingContextInput,
+) -> dict[str, Any]:
+    return {
+        "summary": (
+            f"Prepare for {input.company_name} by connecting the conversation "
+            f"directly to {input.meeting_purpose} and confirming what success "
+            "would look like for both sides."
+        ),
+        "talking_points": [
+            "Open with the meeting purpose and the outcome the user wants.",
+            "Ask what constraints, stakeholders, and timing matter most.",
+            "Frame any company-specific angle as a hypothesis to confirm.",
+        ],
+        "watchout": (
+            "Avoid treating general model knowledge as verified current company news."
+        ),
+        "recommended_next_question": (
+            "What would make this meeting feel successful when it ends?"
+        ),
+    }
+
 
 _DEFAULT_OUTCOMES: dict[str, dict[str, str]] = {
     "apprenticeship": {

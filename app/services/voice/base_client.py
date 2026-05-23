@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import abc
+import asyncio
 import json
 import logging
 from types import TracebackType
@@ -26,6 +27,7 @@ class VoiceClient(abc.ABC):
         self._api_key = api_key
         self._model = model
         self._ws: websockets.asyncio.client.ClientConnection | None = None
+        self._send_lock = asyncio.Lock()
 
     # ---------------------------------------------------------------------------
     # Subclass interface
@@ -101,4 +103,5 @@ class VoiceClient(abc.ABC):
 
     async def _send(self, message: dict[str, Any]) -> None:
         assert self._ws is not None
-        await self._ws.send(json.dumps(message))
+        async with self._send_lock:
+            await self._ws.send(json.dumps(message))
