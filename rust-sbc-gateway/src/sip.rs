@@ -24,17 +24,31 @@ pub fn build_sip_invite(request: &SipInviteRequest) -> anyhow::Result<SipInvite>
     let branch = format!("z9hG4bK{}", Uuid::new_v4().simple());
     let from_tag = Uuid::new_v4().simple().to_string();
 
+    let addr_type = if request.local_host.contains(':') {
+        "IP6"
+    } else {
+        "IP4"
+    };
+
     let mut sdp = String::new();
     sdp.push_str("v=0\r\n");
     sdp.push_str(&format!(
-        "o=RustSBC 2890844526 2890844526 IN IP4 {}\r\n",
-        request.local_host
+        "o=RustSBC 2890844526 2890844526 IN {} {}\r\n",
+        addr_type, request.local_host
     ));
     sdp.push_str("s=-\r\n");
-    sdp.push_str(&format!("c=IN IP4 {}\r\n", request.local_host));
+    sdp.push_str(&format!("c=IN {} {}\r\n", addr_type, request.local_host));
     sdp.push_str("t=0 0\r\n");
-    sdp.push_str(&format!("m=audio {} RTP/AVP 0\r\n", request.local_rtp_port));
+    sdp.push_str(&format!(
+        "m=audio {} RTP/AVP 0 8 101\r\n",
+        request.local_rtp_port
+    ));
     sdp.push_str("a=rtpmap:0 PCMU/8000\r\n");
+    sdp.push_str("a=rtpmap:8 PCMA/8000\r\n");
+    sdp.push_str("a=rtpmap:101 telephone-event/8000\r\n");
+    sdp.push_str("a=fmtp:101 0-16\r\n");
+    sdp.push_str("a=ptime:20\r\n");
+    sdp.push_str("a=sendrecv\r\n");
 
     let mut headers = String::new();
     headers.push_str(&format!(
@@ -119,7 +133,9 @@ mod tests {
             .payload
             .starts_with("INVITE sip:+15551231234@example.sip.twilio.com SIP/2.0"));
         assert!(invite.payload.contains("Content-Type: application/sdp"));
-        assert!(invite.payload.contains("m=audio 10000 RTP/AVP 0"));
+        assert!(invite.payload.contains("m=audio 10000 RTP/AVP 0 8 101"));
+        assert!(invite.payload.contains("a=rtpmap:8 PCMA/8000"));
+        assert!(invite.payload.contains("a=rtpmap:101 telephone-event/8000"));
 
         let split = invite.payload.split("\r\n\r\n").collect::<Vec<_>>();
         assert_eq!(split.len(), 2);

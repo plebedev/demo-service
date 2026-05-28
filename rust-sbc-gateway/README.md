@@ -16,7 +16,7 @@ Infrastructure-only SIP/RTP SBC/B2BUA experiment service for warm transfer proto
 - `GET /health`
 - `GET /metrics`
 - `POST /api/internal/sessions`
-- `PATCH /api/internal/sessions/:session_id/state`
+- `PATCH /api/internal/sessions/{session_id}/state`
 - `POST /api/internal/transfer/start`
 - `GET /api/voice/stream?session_id=<id>` (WebSocket)
 
@@ -25,7 +25,7 @@ Infrastructure-only SIP/RTP SBC/B2BUA experiment service for warm transfer proto
 - `SBC_CONTROL_BIND` (default `0.0.0.0:8082`)
 - `SBC_WS_BIND` (default `0.0.0.0:8083`)
 - `SBC_SIP_BIND` (default `0.0.0.0:5060`)
-- `SBC_ADVERTISE_HOST` (default from `SBC_SIP_BIND` IP)
+- `SBC_ADVERTISE_HOST` (optional; hostname resolves to IPv4, but for Twilio use a public IPv4 literal)
 - `SBC_RTP_START_PORT` (default `10000`)
 - `SBC_RTP_END_PORT` (default `10100`)
 - `SBC_TRUNK_PORT` (default `5060`)

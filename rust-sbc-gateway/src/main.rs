@@ -1,5 +1,5 @@
 use std::collections::HashSet;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -100,6 +100,12 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let config = AppConfig::from_env();
+    if !is_viable_advertise_host(&config.local_sip_advertise_host) {
+        warn!(
+            advertise_host = %config.local_sip_advertise_host,
+            "advertise host is loopback, unspecified, or not an IP; outbound SIP/RTP may fail"
+        );
+    }
     let metrics = Metrics::shared();
     let sessions = SessionRegistry::new();
     let sip_engine_tx = spawn_sip_engine(config.sip_bind, metrics.clone())?;
@@ -129,6 +135,7 @@ async fn main() -> anyhow::Result<()> {
         control_bind = %state.config.control_bind,
         ws_bind = %state.config.ws_bind,
         sip_bind = %state.config.sip_bind,
+        advertise_host = %state.config.local_sip_advertise_host,
         rtp_start = state.config.rtp_start_port,
         rtp_end = state.config.rtp_end_port,
         "rust-sbc-gateway started"
@@ -208,6 +215,14 @@ async fn start_transfer(
     State(state): State<AppState>,
     Json(payload): Json<StartTransferRequest>,
 ) -> Response {
+    if !is_viable_advertise_host(&state.config.local_sip_advertise_host) {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "SBC_ADVERTISE_HOST must be a reachable non-loopback IP address for SIP/RTP",
+        )
+            .into_response();
+    }
+
     let rtp_port = {
         let mut ports = state.rtp_ports.lock().await;
         match ports.allocate() {
@@ -378,6 +393,13 @@ fn spawn_rtp_sender(
             }
         }
     });
+}
+
+fn is_viable_advertise_host(host: &str) -> bool {
+    match host.parse::<IpAddr>() {
+        Ok(ip) => !ip.is_loopback() && !ip.is_unspecified(),
+        Err(_) => false,
+    }
 }
 
 #[cfg(test)]
