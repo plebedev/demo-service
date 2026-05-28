@@ -32,7 +32,7 @@ Infrastructure-only SIP/RTP SBC/B2BUA experiment service for warm transfer proto
 - `SBC_RTP_START_PORT` (default `10000`)
 - `SBC_RTP_END_PORT` (default `10100`)
 - `SBC_TRUNK_PORT` (default `5060`)
-- `SBC_BACKEND_VOICE_WS_URL` (default `wss://demo.lebedev.ai/api/voice/stream`)
+- `SBC_BACKEND_VOICE_WS_URL` (default `ws://backend-api.demo.svc.cluster.local/api/voice/stream`)
 - `SBC_WS_CONNECT_TIMEOUT_MS` (default `3000`)
 - `SBC_CALL_SETUP_TIMEOUT_MS` (default `7000`)
 - `SBC_SIP_RINGING_ENABLED` (default `true`)
