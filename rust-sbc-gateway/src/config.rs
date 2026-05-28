@@ -10,6 +10,11 @@ pub struct AppConfig {
     pub rtp_start_port: u16,
     pub rtp_end_port: u16,
     pub default_trunk_port: u16,
+    pub backend_voice_ws_url: String,
+    pub ws_connect_timeout_ms: u64,
+    pub call_setup_timeout_ms: u64,
+    pub sip_ringing_enabled: bool,
+    pub callsid_prefix: String,
 }
 
 impl AppConfig {
@@ -20,6 +25,14 @@ impl AppConfig {
         let rtp_start_port = u16_from_env("SBC_RTP_START_PORT", 10000);
         let rtp_end_port = u16_from_env("SBC_RTP_END_PORT", 10100);
         let default_trunk_port = u16_from_env("SBC_TRUNK_PORT", 5060);
+        let backend_voice_ws_url = string_from_env(
+            "SBC_BACKEND_VOICE_WS_URL",
+            "wss://demo.lebedev.ai/api/voice/stream",
+        );
+        let ws_connect_timeout_ms = u64_from_env("SBC_WS_CONNECT_TIMEOUT_MS", 3000);
+        let call_setup_timeout_ms = u64_from_env("SBC_CALL_SETUP_TIMEOUT_MS", 7000);
+        let sip_ringing_enabled = bool_from_env("SBC_SIP_RINGING_ENABLED", true);
+        let callsid_prefix = string_from_env("SBC_CALLSID_PREFIX", "rust");
         let local_sip_advertise_host = env::var("SBC_ADVERTISE_HOST")
             .ok()
             .map(|value| value.trim().to_string())
@@ -42,6 +55,11 @@ impl AppConfig {
             rtp_start_port,
             rtp_end_port,
             default_trunk_port,
+            backend_voice_ws_url,
+            ws_connect_timeout_ms,
+            call_setup_timeout_ms,
+            sip_ringing_enabled,
+            callsid_prefix,
         }
     }
 }
@@ -87,6 +105,33 @@ fn u16_from_env(key: &str, default_value: u16) -> u16 {
         .ok()
         .and_then(|value| value.parse::<u16>().ok())
         .unwrap_or(default_value)
+}
+
+fn u64_from_env(key: &str, default_value: u64) -> u64 {
+    env::var(key)
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(default_value)
+}
+
+fn bool_from_env(key: &str, default_value: bool) -> bool {
+    env::var(key)
+        .ok()
+        .map(|value| value.trim().to_ascii_lowercase())
+        .and_then(|value| match value.as_str() {
+            "1" | "true" | "yes" | "y" | "on" => Some(true),
+            "0" | "false" | "no" | "n" | "off" => Some(false),
+            _ => None,
+        })
+        .unwrap_or(default_value)
+}
+
+fn string_from_env(key: &str, default_value: &str) -> String {
+    env::var(key)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| default_value.to_string())
 }
 
 #[cfg(test)]

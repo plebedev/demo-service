@@ -108,7 +108,7 @@ async fn main() -> anyhow::Result<()> {
     }
     let metrics = Metrics::shared();
     let sessions = SessionRegistry::new();
-    let sip_engine_tx = spawn_sip_engine(config.sip_bind, metrics.clone())?;
+    let sip_engine_tx = spawn_sip_engine(config.clone(), metrics.clone())?;
 
     let state = AppState {
         rtp_ports: Arc::new(Mutex::new(RtpPortPool::new(
@@ -419,6 +419,11 @@ mod tests {
                 rtp_start_port: 10000,
                 rtp_end_port: 10100,
                 default_trunk_port: 5060,
+                backend_voice_ws_url: "ws://127.0.0.1:8080/api/voice/stream".to_string(),
+                ws_connect_timeout_ms: 3000,
+                call_setup_timeout_ms: 7000,
+                sip_ringing_enabled: true,
+                callsid_prefix: "rust".to_string(),
             },
             sessions: SessionRegistry::new(),
             metrics: Metrics::shared(),
