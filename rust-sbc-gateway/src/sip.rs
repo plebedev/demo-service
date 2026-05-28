@@ -29,7 +29,7 @@ pub struct SipParsedRequest {
     pub method: String,
     pub request_uri: String,
     pub version: String,
-    pub headers: HashMap<String, String>,
+    pub headers: SipHeaders,
     pub body: String,
 }
 
@@ -38,8 +38,33 @@ pub struct SipParsedResponse {
     pub version: String,
     pub status_code: u16,
     pub reason_phrase: String,
-    pub headers: HashMap<String, String>,
+    pub headers: SipHeaders,
     pub body: String,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct SipHeaders {
+    entries: Vec<(String, String)>,
+    first_values: HashMap<String, String>,
+}
+
+impl SipHeaders {
+    pub fn get(&self, name: &str) -> Option<&String> {
+        self.first_values.get(&name.trim().to_ascii_lowercase())
+    }
+
+    pub fn values<'a>(&'a self, name: &str) -> impl Iterator<Item = &'a str> {
+        let normalized_name = name.trim().to_ascii_lowercase();
+        self.entries
+            .iter()
+            .filter(move |(entry_name, _)| *entry_name == normalized_name)
+            .map(|(_, value)| value.as_str())
+    }
+
+    fn insert(&mut self, name: String, value: String) {
+        self.entries.push((name.clone(), value.clone()));
+        self.first_values.entry(name).or_insert(value);
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -118,7 +143,6 @@ pub fn build_sip_200_ok_for_invite(
     local_rtp_port: u16,
 ) -> Option<String> {
     let sdp = build_sdp_offer(local_host, local_rtp_port);
-    let via = request.headers.get("via")?;
     let from = request.headers.get("from")?;
     let to = request.headers.get("to")?;
     let call_id = request.headers.get("call-id")?;
@@ -132,7 +156,6 @@ pub fn build_sip_200_ok_for_invite(
 
     let mut lines = vec![
         "SIP/2.0 200 OK".to_string(),
-        format!("Via: {}", via),
         format!("From: {}", from),
         format!("To: {}", to_value),
         format!("Call-ID: {}", call_id),
@@ -141,6 +164,8 @@ pub fn build_sip_200_ok_for_invite(
         "Content-Type: application/sdp".to_string(),
         format!("Content-Length: {}", sdp.len()),
     ];
+
+    prepend_response_route_headers(request, &mut lines)?;
 
     Some(build_sip_message(&mut lines, Some(&sdp)))
 }
@@ -277,12 +302,11 @@ pub fn parse_sip_status_line(message: &str) -> Option<String> {
 }
 
 pub fn sip_header_value(message: &str, header_name: &str) -> Option<String> {
-    let name = header_name.to_ascii_lowercase();
     if let Some(request) = parse_sip_request(message) {
-        return request.headers.get(&name).cloned();
+        return request.headers.get(header_name).cloned();
     }
     if let Some(response) = parse_sip_response(message) {
-        return response.headers.get(&name).cloned();
+        return response.headers.get(header_name).cloned();
     }
     None
 }
@@ -402,8 +426,8 @@ pub fn is_sip_200_ok(message: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn parse_headers<'a>(lines: impl Iterator<Item = &'a str>) -> HashMap<String, String> {
-    let mut headers = HashMap::<String, String>::new();
+fn parse_headers<'a>(lines: impl Iterator<Item = &'a str>) -> SipHeaders {
+    let mut headers = SipHeaders::default();
     for line in lines {
         let trimmed = line.trim();
         if trimmed.is_empty() {
@@ -434,7 +458,6 @@ fn build_response_for_request(
     local_tag: Option<&str>,
     body: Option<&str>,
 ) -> Option<String> {
-    let via = request.headers.get("via")?;
     let from = request.headers.get("from")?;
     let to = request.headers.get("to")?;
     let call_id = request.headers.get("call-id")?;
@@ -448,12 +471,13 @@ fn build_response_for_request(
     };
     let mut lines = vec![
         format!("SIP/2.0 {} {}", status_code, reason_phrase),
-        format!("Via: {}", via),
         format!("From: {}", from),
         format!("To: {}", to_value),
         format!("Call-ID: {}", call_id),
         format!("CSeq: {}", cseq),
     ];
+
+    prepend_response_route_headers(request, &mut lines)?;
 
     if let Some(body_value) = body {
         lines.push("Content-Type: application/sdp".to_string());
@@ -463,6 +487,27 @@ fn build_response_for_request(
         lines.push("Content-Length: 0".to_string());
         Some(build_sip_message(&mut lines, None))
     }
+}
+
+fn prepend_response_route_headers(
+    request: &SipParsedRequest,
+    lines: &mut Vec<String>,
+) -> Option<()> {
+    let vias = request.headers.values("via").collect::<Vec<_>>();
+    if vias.is_empty() {
+        return None;
+    }
+
+    let mut prefix_lines = Vec::new();
+    for via in vias {
+        prefix_lines.push(format!("Via: {}", via));
+    }
+    for record_route in request.headers.values("record-route") {
+        prefix_lines.push(format!("Record-Route: {}", record_route));
+    }
+
+    lines.splice(1..1, prefix_lines);
+    Some(())
 }
 
 fn build_sdp_offer(local_host: &str, local_rtp_port: u16) -> String {
@@ -665,6 +710,8 @@ mod tests {
     fn builds_200_ok_for_invite_with_to_tag() {
         let invite = "INVITE sip:demo@example.com SIP/2.0\r\n\
                       Via: SIP/2.0/UDP 1.2.3.4:5060;branch=z9\r\n\
+                      Via: SIP/2.0/UDP 5.6.7.8:5060;branch=z10\r\n\
+                      Record-Route: <sip:proxy-a.example.com;lr>\r\n\
                       From: <sip:a@b>;tag=abc\r\n\
                       To: <sip:demo@example.com>\r\n\
                       Call-ID: id-1\r\n\
@@ -672,9 +719,25 @@ mod tests {
         let parsed = parse_sip_request(invite).expect("should parse");
         let response = build_sip_200_ok_for_invite(&parsed, "localtag", "129.80.152.84", 10000)
             .expect("response");
+        assert!(response.contains("Via: SIP/2.0/UDP 1.2.3.4:5060;branch=z9\r\nVia: SIP/2.0/UDP 5.6.7.8:5060;branch=z10\r\n"));
+        assert!(response.contains("Record-Route: <sip:proxy-a.example.com;lr>"));
         assert!(response.contains("To: <sip:demo@example.com>;tag=localtag"));
         assert!(response.contains("Contact: <sip:sbc@129.80.152.84:5060>"));
         assert!(response.contains("m=audio 10000 RTP/AVP 0 8 101"));
+    }
+
+    #[test]
+    fn sip_header_value_keeps_top_via_when_multiple_present() {
+        let invite = "INVITE sip:demo@example.com SIP/2.0\r\n\
+                      Via: SIP/2.0/UDP 54.172.60.2:5060;branch=z9hG4bK-top\r\n\
+                      Via: SIP/2.0/UDP 172.16.1.10:5060;branch=z9hG4bK-lower\r\n\
+                      Call-ID: id-2\r\n\
+                      CSeq: 1 INVITE\r\n\r\n";
+
+        assert_eq!(
+            sip_header_value(invite, "Via"),
+            Some("SIP/2.0/UDP 54.172.60.2:5060;branch=z9hG4bK-top".to_string())
+        );
     }
 
     #[test]
