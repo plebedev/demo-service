@@ -16,6 +16,10 @@ pub struct SipInvite {
     pub call_id: String,
     pub payload: String,
     pub target_addr: String,
+    pub request_uri: String,
+    pub via: String,
+    pub from: String,
+    pub cseq: u32,
 }
 
 pub fn build_sip_invite(request: &SipInviteRequest) -> anyhow::Result<SipInvite> {
@@ -50,25 +54,24 @@ pub fn build_sip_invite(request: &SipInviteRequest) -> anyhow::Result<SipInvite>
     sdp.push_str("a=ptime:20\r\n");
     sdp.push_str("a=sendrecv\r\n");
 
+    let request_uri = format!("sip:{}@{}", request.target_phone, request.trunk_host);
+    let via = format!("SIP/2.0/UDP {}:5060;branch={}", request.local_host, branch);
+    let from = format!(
+        "<sip:{}@{}>;tag={}",
+        request.twilio_number, request.trunk_host, from_tag
+    );
+    let cseq = 1u32;
+
     let mut headers = String::new();
-    headers.push_str(&format!(
-        "INVITE sip:{}@{} SIP/2.0\r\n",
-        request.target_phone, request.trunk_host
-    ));
-    headers.push_str(&format!(
-        "Via: SIP/2.0/UDP {}:5060;branch={}\r\n",
-        request.local_host, branch
-    ));
+    headers.push_str(&format!("INVITE {} SIP/2.0\r\n", request_uri));
+    headers.push_str(&format!("Via: {}\r\n", via));
     headers.push_str(&format!(
         "To: <sip:{}@{}>\r\n",
         request.target_phone, request.trunk_host
     ));
-    headers.push_str(&format!(
-        "From: <sip:{}@{}>;tag={}\r\n",
-        request.twilio_number, request.trunk_host, from_tag
-    ));
+    headers.push_str(&format!("From: {}\r\n", from));
     headers.push_str(&format!("Call-ID: {}\r\n", call_id));
-    headers.push_str("CSeq: 1 INVITE\r\n");
+    headers.push_str(&format!("CSeq: {} INVITE\r\n", cseq));
     headers.push_str(&format!(
         "Contact: <sip:{}@{}:5060>\r\n",
         request.twilio_number, request.local_host
@@ -82,6 +85,10 @@ pub fn build_sip_invite(request: &SipInviteRequest) -> anyhow::Result<SipInvite>
         call_id,
         payload: format!("{}{}", headers, sdp),
         target_addr,
+        request_uri,
+        via,
+        from,
+        cseq,
     })
 }
 
@@ -93,6 +100,53 @@ pub fn is_sip_200_ok(message: &str) -> bool {
 
 pub fn parse_sip_status_line(message: &str) -> Option<String> {
     message.lines().next().map(|line| line.trim().to_string())
+}
+
+pub fn parse_sip_status_code(message: &str) -> Option<u16> {
+    let status_line = parse_sip_status_line(message)?;
+    let mut parts = status_line.split_whitespace();
+    let protocol = parts.next()?;
+    if !protocol.eq_ignore_ascii_case("SIP/2.0") {
+        return None;
+    }
+    parts.next()?.parse::<u16>().ok()
+}
+
+pub fn sip_header_value(message: &str, header_name: &str) -> Option<String> {
+    let needle = header_name.to_ascii_lowercase();
+    for line in message.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            break;
+        }
+        let Some((name, value)) = trimmed.split_once(':') else {
+            continue;
+        };
+        if name.trim().eq_ignore_ascii_case(&needle) {
+            return Some(value.trim().to_string());
+        }
+    }
+    None
+}
+
+pub fn build_ack_for_final_response(response: &str, invite: &SipInvite) -> Option<String> {
+    let to = sip_header_value(response, "To")?;
+    let call_id = sip_header_value(response, "Call-ID")?;
+    if call_id != invite.call_id {
+        return None;
+    }
+
+    Some(format!(
+        "ACK {} SIP/2.0\r\n\
+        Via: {}\r\n\
+        To: {}\r\n\
+        From: {}\r\n\
+        Call-ID: {}\r\n\
+        CSeq: {} ACK\r\n\
+        Max-Forwards: 70\r\n\
+        Content-Length: 0\r\n\r\n",
+        invite.request_uri, invite.via, to, invite.from, invite.call_id, invite.cseq
+    ))
 }
 
 pub fn extract_audio_port_from_sdp(message: &str) -> Option<u16> {
@@ -112,8 +166,8 @@ pub fn extract_audio_port_from_sdp(message: &str) -> Option<u16> {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_sip_invite, extract_audio_port_from_sdp, is_sip_200_ok, parse_sip_status_line,
-        SipInviteRequest,
+        build_ack_for_final_response, build_sip_invite, extract_audio_port_from_sdp, is_sip_200_ok,
+        parse_sip_status_code, parse_sip_status_line, sip_header_value, SipInviteRequest,
     };
 
     #[test]
@@ -167,5 +221,43 @@ mod tests {
             Some("SIP/2.0 200 OK".to_string())
         );
         assert_eq!(extract_audio_port_from_sdp(response), Some(18452));
+        assert_eq!(parse_sip_status_code(response), Some(200));
+    }
+
+    #[test]
+    fn parses_case_insensitive_sip_headers() {
+        let response =
+            "SIP/2.0 603 Decline\r\ncall-id: abc@host\r\ntO: <sip:+1555@example.com>;tag=z\r\n\r\n";
+        assert_eq!(
+            sip_header_value(response, "Call-ID"),
+            Some("abc@host".to_string())
+        );
+        assert_eq!(
+            sip_header_value(response, "to"),
+            Some("<sip:+1555@example.com>;tag=z".to_string())
+        );
+    }
+
+    #[test]
+    fn builds_ack_for_final_response() {
+        let request = SipInviteRequest {
+            session_id: "session-1".to_string(),
+            target_phone: "+15551231234".to_string(),
+            twilio_number: "+15557654321".to_string(),
+            trunk_host: "example.pstn.twilio.com".to_string(),
+            trunk_port: 5060,
+            local_host: "129.80.152.84".to_string(),
+            local_rtp_port: 10000,
+        };
+        let invite = build_sip_invite(&request).expect("invite should build");
+        let response = format!(
+            "SIP/2.0 603 Decline\r\nCall-ID: {}\r\nTo: <sip:+15551231234@example.pstn.twilio.com>;tag=abc123\r\n\r\n",
+            invite.call_id
+        );
+
+        let ack = build_ack_for_final_response(&response, &invite).expect("ack should build");
+        assert!(ack.starts_with("ACK sip:+15551231234@example.pstn.twilio.com SIP/2.0"));
+        assert!(ack.contains("CSeq: 1 ACK"));
+        assert!(ack.contains("Content-Length: 0"));
     }
 }
