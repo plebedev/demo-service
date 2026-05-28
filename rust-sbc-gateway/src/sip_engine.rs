@@ -8,8 +8,9 @@ use tracing::{error, info, warn};
 
 use crate::metrics::Metrics;
 use crate::sip::{
-    build_ack_for_final_response, build_sip_invite, extract_audio_port_from_sdp, is_sip_200_ok,
-    parse_sip_status_code, parse_sip_status_line, sip_header_value, SipInvite, SipInviteRequest,
+    build_ack_for_final_response, build_response_for_in_dialog_request, build_sip_invite,
+    extract_audio_port_from_sdp, is_sip_200_ok, parse_sip_request_method, parse_sip_status_code,
+    parse_sip_status_line, sip_header_value, SipInvite, SipInviteRequest,
 };
 
 #[derive(Debug)]
@@ -78,6 +79,27 @@ pub fn spawn_sip_engine(
                             let text = String::from_utf8_lossy(&buf[..size]);
                             let status_line = parse_sip_status_line(&text)
                                 .unwrap_or_else(|| "<unknown SIP response>".to_string());
+
+                            if let Some(method) = parse_sip_request_method(&text) {
+                                if method == "BYE" {
+                                    match build_response_for_in_dialog_request(&text, 200, "OK") {
+                                        Some(response) => {
+                                            if let Err(err) = socket.send_to(response.as_bytes(), source_addr).await {
+                                                warn!(%err, %source_addr, "failed to send 200 OK for SIP BYE");
+                                            } else {
+                                                info!(%source_addr, "sent 200 OK for SIP BYE");
+                                            }
+                                        }
+                                        None => {
+                                            warn!(%source_addr, "failed to build 200 OK for SIP BYE");
+                                        }
+                                    }
+                                } else {
+                                    info!(%source_addr, method=%method, %status_line, "received SIP request");
+                                }
+                                continue;
+                            }
+
                             let status_code = parse_sip_status_code(&text);
 
                             match status_code {

@@ -102,6 +102,21 @@ pub fn parse_sip_status_line(message: &str) -> Option<String> {
     message.lines().next().map(|line| line.trim().to_string())
 }
 
+pub fn parse_sip_request_method(message: &str) -> Option<String> {
+    let line = parse_sip_status_line(message)?;
+    if line.starts_with("SIP/2.0") {
+        return None;
+    }
+    let mut parts = line.split_whitespace();
+    let method = parts.next()?;
+    let _uri = parts.next()?;
+    let version = parts.next()?;
+    if version.eq_ignore_ascii_case("SIP/2.0") {
+        return Some(method.to_ascii_uppercase());
+    }
+    None
+}
+
 pub fn parse_sip_status_code(message: &str) -> Option<u16> {
     let status_line = parse_sip_status_line(message)?;
     let mut parts = status_line.split_whitespace();
@@ -127,6 +142,29 @@ pub fn sip_header_value(message: &str, header_name: &str) -> Option<String> {
         }
     }
     None
+}
+
+pub fn build_response_for_in_dialog_request(
+    request: &str,
+    status_code: u16,
+    reason_phrase: &str,
+) -> Option<String> {
+    let via = sip_header_value(request, "Via")?;
+    let from = sip_header_value(request, "From")?;
+    let to = sip_header_value(request, "To")?;
+    let call_id = sip_header_value(request, "Call-ID")?;
+    let cseq = sip_header_value(request, "CSeq")?;
+
+    Some(format!(
+        "SIP/2.0 {} {}\r\n\
+        Via: {}\r\n\
+        From: {}\r\n\
+        To: {}\r\n\
+        Call-ID: {}\r\n\
+        CSeq: {}\r\n\
+        Content-Length: 0\r\n\r\n",
+        status_code, reason_phrase, via, from, to, call_id, cseq
+    ))
 }
 
 pub fn build_ack_for_final_response(response: &str, invite: &SipInvite) -> Option<String> {
@@ -166,7 +204,8 @@ pub fn extract_audio_port_from_sdp(message: &str) -> Option<u16> {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_ack_for_final_response, build_sip_invite, extract_audio_port_from_sdp, is_sip_200_ok,
+        build_ack_for_final_response, build_response_for_in_dialog_request, build_sip_invite,
+        extract_audio_port_from_sdp, is_sip_200_ok, parse_sip_request_method,
         parse_sip_status_code, parse_sip_status_line, sip_header_value, SipInviteRequest,
     };
 
@@ -259,5 +298,30 @@ mod tests {
         assert!(ack.starts_with("ACK sip:+15551231234@example.pstn.twilio.com SIP/2.0"));
         assert!(ack.contains("CSeq: 1 ACK"));
         assert!(ack.contains("Content-Length: 0"));
+    }
+
+    #[test]
+    fn parses_request_method() {
+        let bye = "BYE sip:+17817346618@129.80.152.84:5060 SIP/2.0\r\nCall-ID: a\r\n\r\n";
+        assert_eq!(parse_sip_request_method(bye), Some("BYE".to_string()));
+        let response = "SIP/2.0 200 OK\r\nCall-ID: a\r\n\r\n";
+        assert_eq!(parse_sip_request_method(response), None);
+    }
+
+    #[test]
+    fn builds_200_ok_for_bye_request() {
+        let bye_request = "BYE sip:+17817346618@129.80.152.84:5060 SIP/2.0\r\n\
+                           Via: SIP/2.0/UDP 54.172.60.3:5060;branch=z9hG4bKabc\r\n\
+                           From: <sip:+16177100171@peter-voice-demo.pstn.ashburn.twilio.com>;tag=fromtag\r\n\
+                           To: <sip:+17817346618@peter-voice-demo.pstn.ashburn.twilio.com>;tag=totag\r\n\
+                           Call-ID: call-123\r\n\
+                           CSeq: 1 BYE\r\n\r\n";
+
+        let response =
+            build_response_for_in_dialog_request(bye_request, 200, "OK").expect("response builds");
+        assert!(response.starts_with("SIP/2.0 200 OK"));
+        assert!(response.contains("CSeq: 1 BYE"));
+        assert!(response.contains("Call-ID: call-123"));
+        assert!(response.contains("Content-Length: 0"));
     }
 }
