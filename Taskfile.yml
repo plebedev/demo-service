@@ -193,9 +193,21 @@ tasks:
     cmds:
       - SERVICE="{{.SERVICE}}" RELEASE_NAME="${RELEASE_NAME:-backend-api}" TEXT_TOOLS_RELEASE_NAME="${TEXT_TOOLS_RELEASE_NAME:-demo-text-tools}" RUST_SBC_RELEASE_NAME="${RUST_SBC_RELEASE_NAME:-demo-rust-sbc-gateway}" NAMESPACE="${NAMESPACE:-demo}" VALUES_FILE="${VALUES_FILE:-deploy/helm/backend-api/values-demo.yaml}" TEXT_TOOLS_VALUES_FILE="${TEXT_TOOLS_VALUES_FILE:-deploy/helm/text-tools/values-demo.yaml}" RUST_SBC_VALUES_FILE="${RUST_SBC_VALUES_FILE:-deploy/helm/rust-sbc-gateway/values-demo.yaml}" IMAGE_REPOSITORY="${IMAGE_REPOSITORY:-backend-api}" TEXT_TOOLS_IMAGE_REPOSITORY="${TEXT_TOOLS_IMAGE_REPOSITORY:-demo-text-tools}" RUST_SBC_IMAGE_REPOSITORY="${RUST_SBC_IMAGE_REPOSITORY:-demo-rust-sbc-gateway}" IMAGE_TAG="${IMAGE_TAG:-}" bash ./deploy/scripts/deploy.sh
 
+  rust-sbc-gateway:deploy:
+    desc: >-
+      Deploy only the Rust SBC gateway service.
+    cmds:
+      - SERVICE="rust-sbc-gateway" RUST_SBC_RELEASE_NAME="${RUST_SBC_RELEASE_NAME:-demo-rust-sbc-gateway}" NAMESPACE="${NAMESPACE:-demo}" RUST_SBC_VALUES_FILE="${RUST_SBC_VALUES_FILE:-deploy/helm/rust-sbc-gateway/values-demo.yaml}" RUST_SBC_IMAGE_REPOSITORY="${RUST_SBC_IMAGE_REPOSITORY:-demo-rust-sbc-gateway}" IMAGE_TAG="${IMAGE_TAG:-}" bash ./deploy/scripts/deploy.sh
+
   ship-deploy:
     cmds:
       - SERVICE="{{.SERVICE}}" RELEASE_NAME="${RELEASE_NAME:-backend-api}" TEXT_TOOLS_RELEASE_NAME="${TEXT_TOOLS_RELEASE_NAME:-demo-text-tools}" RUST_SBC_RELEASE_NAME="${RUST_SBC_RELEASE_NAME:-demo-rust-sbc-gateway}" NAMESPACE="${NAMESPACE:-demo}" VALUES_FILE="${VALUES_FILE:-deploy/helm/backend-api/values-demo.yaml}" TEXT_TOOLS_VALUES_FILE="${TEXT_TOOLS_VALUES_FILE:-deploy/helm/text-tools/values-demo.yaml}" RUST_SBC_VALUES_FILE="${RUST_SBC_VALUES_FILE:-deploy/helm/rust-sbc-gateway/values-demo.yaml}" IMAGE_REPOSITORY="${IMAGE_REPOSITORY:-backend-api}" TEXT_TOOLS_IMAGE_REPOSITORY="${TEXT_TOOLS_IMAGE_REPOSITORY:-demo-text-tools}" RUST_SBC_IMAGE_REPOSITORY="${RUST_SBC_IMAGE_REPOSITORY:-demo-rust-sbc-gateway}" DEPLOY_TARGET="${DEPLOY_TARGET:-ubuntu@openclaw}" DEPLOY_PATH="${DEPLOY_PATH:-/home/ubuntu/backend-api-deploy}" SSH_OPTS="${SSH_OPTS:-}" KEEP_REMOTE_RELEASES="${KEEP_REMOTE_RELEASES:-3}" bash ./deploy/scripts/ship-deploy.sh
+
+  rust-sbc-gateway:ship-deploy:
+    desc: >-
+      Build, ship, and deploy only the Rust SBC gateway service.
+    cmds:
+      - SERVICE="rust-sbc-gateway" RUST_SBC_RELEASE_NAME="${RUST_SBC_RELEASE_NAME:-demo-rust-sbc-gateway}" NAMESPACE="${NAMESPACE:-demo}" RUST_SBC_VALUES_FILE="${RUST_SBC_VALUES_FILE:-deploy/helm/rust-sbc-gateway/values-demo.yaml}" RUST_SBC_IMAGE_REPOSITORY="${RUST_SBC_IMAGE_REPOSITORY:-demo-rust-sbc-gateway}" DEPLOY_TARGET="${DEPLOY_TARGET:-ubuntu@openclaw}" DEPLOY_PATH="${DEPLOY_PATH:-/home/ubuntu/backend-api-deploy}" SSH_OPTS="${SSH_OPTS:-}" KEEP_REMOTE_RELEASES="${KEEP_REMOTE_RELEASES:-3}" bash ./deploy/scripts/ship-deploy.sh
 
   rollback:
     cmds:
