@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::net::SocketAddr;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -45,6 +46,13 @@ impl InboundBridgeHandle {
 enum WsOutboundMessage {
     Text(String),
     StopAndClose,
+}
+
+#[derive(Debug)]
+enum RtpPlayoutCommand {
+    Append(Vec<u8>),
+    Clear,
+    End,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -167,13 +175,73 @@ pub async fn start_inbound_bridge(
         info!(call_id = %call_id_for_rtp, "stopped RTP->WS bridge");
     });
 
+    let call_id_for_playout = params.call_id.clone();
+    let rtp_socket_for_playout = rtp_socket.clone();
+    let remote_media_for_playout = params.remote_media_addr;
+    let metrics_for_playout = metrics.clone();
+    let (rtp_playout_tx, mut rtp_playout_rx) = mpsc::channel::<RtpPlayoutCommand>(1024);
+    let rtp_playout = tokio::spawn(async move {
+        let mut rtp_builder = RtpPacketBuilder::new(0, 0, 0x5162_7363);
+        let mut playout_buffer = VecDeque::<u8>::with_capacity(8192);
+        let mut ticker = tokio::time::interval(Duration::from_millis(20));
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
+        let mut running = true;
+        while running {
+            tokio::select! {
+                maybe_cmd = rtp_playout_rx.recv() => {
+                    match maybe_cmd {
+                        Some(RtpPlayoutCommand::Append(bytes)) => {
+                            playout_buffer.extend(bytes);
+                        }
+                        Some(RtpPlayoutCommand::Clear) => {
+                            playout_buffer.clear();
+                        }
+                        Some(RtpPlayoutCommand::End) | None => {
+                            running = false;
+                        }
+                    }
+                }
+                _ = ticker.tick() => {
+                    if playout_buffer.is_empty() {
+                        continue;
+                    }
+
+                    let mut frame = vec![0xFFu8; 160];
+                    let mut consumed = 0usize;
+                    while consumed < 160 {
+                        let Some(sample) = playout_buffer.pop_front() else {
+                            break;
+                        };
+                        frame[consumed] = sample;
+                        consumed += 1;
+                    }
+
+                    let packet = rtp_builder.build_packet(&frame);
+                    match rtp_socket_for_playout.send_to(&packet, remote_media_for_playout).await {
+                        Ok(_) => {
+                            metrics_for_playout
+                                .rtp_packets_sent_total
+                                .fetch_add(1, Ordering::Relaxed);
+                        }
+                        Err(err) => {
+                            metrics_for_playout
+                                .udp_send_errors_total
+                                .fetch_add(1, Ordering::Relaxed);
+                            warn!(%err, %remote_media_for_playout, "failed sending RTP playout packet");
+                        }
+                    }
+                }
+            }
+        }
+
+        info!(call_id = %call_id_for_playout, "stopped RTP playout bridge");
+    });
+
     let call_id_for_ws = params.call_id.clone();
     let engine_event_tx_for_ws = engine_event_tx.clone();
-    let metrics_for_ws = metrics.clone();
-    let rtp_socket_for_ws = rtp_socket;
-    let remote_media_for_ws = params.remote_media_addr;
+    let rtp_playout_tx_for_ws = rtp_playout_tx.clone();
     let ws_to_rtp = tokio::spawn(async move {
-        let mut rtp_builder = RtpPacketBuilder::new(0, 0, 0x5162_7363);
         while let Some(msg_result) = ws_read.next().await {
             let Ok(msg) = msg_result else {
                 break;
@@ -196,26 +264,19 @@ pub async fn start_inbound_bridge(
                     let Ok(payload) = decoded else {
                         continue;
                     };
-                    let packet = rtp_builder.build_packet(&payload);
-                    match rtp_socket_for_ws
-                        .send_to(&packet, remote_media_for_ws)
+                    if rtp_playout_tx_for_ws
+                        .send(RtpPlayoutCommand::Append(payload))
                         .await
+                        .is_err()
                     {
-                        Ok(_) => {
-                            metrics_for_ws
-                                .rtp_packets_sent_total
-                                .fetch_add(1, Ordering::Relaxed);
-                        }
-                        Err(err) => {
-                            metrics_for_ws
-                                .udp_send_errors_total
-                                .fetch_add(1, Ordering::Relaxed);
-                            warn!(%err, %remote_media_for_ws, "failed sending RTP to remote media");
-                        }
+                        break;
                     }
                 }
-                "clear" => {}
+                "clear" => {
+                    let _ = rtp_playout_tx_for_ws.send(RtpPlayoutCommand::Clear).await;
+                }
                 "end" => {
+                    let _ = rtp_playout_tx_for_ws.send(RtpPlayoutCommand::End).await;
                     let _ = engine_event_tx_for_ws
                         .send(InboundBridgeEvent::BackendEndRequested {
                             call_id: call_id_for_ws.clone(),
@@ -226,6 +287,8 @@ pub async fn start_inbound_bridge(
                 _ => {}
             }
         }
+
+        let _ = rtp_playout_tx_for_ws.send(RtpPlayoutCommand::End).await;
         info!(call_id = %call_id_for_ws, "stopped WS->RTP bridge");
     });
 
@@ -235,7 +298,7 @@ pub async fn start_inbound_bridge(
         local_rtp_port: params.local_rtp_port,
         local_tag: params.local_tag,
         remote_media_addr: params.remote_media_addr,
-        tasks: vec![ws_writer, rtp_to_ws, ws_to_rtp],
+        tasks: vec![ws_writer, rtp_to_ws, rtp_playout, ws_to_rtp],
         ws_out_tx,
     })
 }
