@@ -111,7 +111,7 @@ pub async fn start_inbound_bridge(
         while let Some(msg) = ws_out_rx.recv().await {
             match msg {
                 WsOutboundMessage::Text(text) => {
-                    if ws_write.send(Message::Text(text.into())).await.is_err() {
+                    if ws_write.send(Message::Text(text)).await.is_err() {
                         break;
                     }
                 }
@@ -120,9 +120,7 @@ pub async fn start_inbound_bridge(
                         "event": "stop",
                         "streamSid": stream_sid_for_writer,
                     });
-                    let _ = ws_write
-                        .send(Message::Text(stop_message.to_string().into()))
-                        .await;
+                    let _ = ws_write.send(Message::Text(stop_message.to_string())).await;
                     let _ = ws_write.close().await;
                     info!(call_id = %call_id_for_writer, "closed backend voice websocket");
                     break;

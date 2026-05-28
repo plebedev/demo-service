@@ -307,12 +307,12 @@ pub fn spawn_sip_engine(
                                     &config,
                                     &metrics,
                                     &mut outbound_invites,
-                                    &inbound_dialogs,
                                     &payload,
                                     source_addr,
-                                    status_code,
-                                    &status_line,
                                 ).await;
+                                if status_code == 200 {
+                                    metrics.sip_200_ok_total.fetch_add(1, Ordering::Relaxed);
+                                }
                             } else {
                                 warn!(%source_addr, %status_line, "received non-SIP payload on SIP socket");
                             }
@@ -617,12 +617,15 @@ async fn handle_sip_response(
     config: &AppConfig,
     metrics: &Arc<Metrics>,
     outbound_invites: &mut HashMap<String, OutboundInviteTransaction>,
-    _inbound_dialogs: &HashMap<String, InboundDialog>,
     payload: &str,
     source_addr: SocketAddr,
-    status_code: u16,
-    status_line: &str,
 ) {
+    let Some(status_code) = parse_sip_status_code(payload) else {
+        return;
+    };
+    let status_line =
+        parse_sip_status_line(payload).unwrap_or_else(|| "<unknown SIP response>".to_string());
+
     match status_code {
         code if code < 200 => {
             info!(%source_addr, %status_line, "received provisional SIP response");
@@ -669,10 +672,6 @@ async fn handle_sip_response(
                     info!(%call_id, target=%ack.target_addr, status_code=%status_code, "sent SIP ACK");
                     transaction.ack_sent_once = true;
                 }
-            }
-
-            if status_code == 200 {
-                metrics.sip_200_ok_total.fetch_add(1, Ordering::Relaxed);
             }
 
             if status_code >= 300 {

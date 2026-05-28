@@ -26,6 +26,8 @@ tasks:
     cmds:
       - task text-tools:lint
       - task text-tools:test
+      - task rust-sbc-gateway:lint
+      - task rust-sbc-gateway:test
       - bash -lc 'poetry run mypy {{.SRC_DIR}} && PYTHONPYCACHEPREFIX=/tmp/backend-api-pyc poetry run python -m compileall {{.SRC_DIR}} && poetry run black --workers 1 --check --diff {{.SRC_DIR}} && poetry run pydocstyle {{.SRC_DIR}} && poetry run python -m pytest && PYTHONPYCACHEPREFIX=/tmp/backend-api-pyc poetry run python -m compileall app alembic'
 
   test:
