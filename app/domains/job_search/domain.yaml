@@ -48,18 +48,234 @@ views:
   - id: role_fit
     display_name: Role Fit
     description: Source-grounded fit, evidence gaps, risks, and positioning.
+    context:
+      limits:
+        chunks: 18
+        signals: 24
+        actionable_items: 6
+        chunk_chars: 900
+        source_excerpt_chars: 300
+      nodes:
+        deterministic_view: {}
+        artifacts:
+          types:
+            - job_description
+            - resume
+            - personal_story
+        signals:
+          types:
+            - role_expectation
+            - technology
+            - technical_skill
+            - platform_experience
+            - inferred_risk
+            - unusual_scope_indicator
+            - open_question
+            - interviewer_concern
+            - leadership_signal
+            - measurable_outcome
+            - ai_agent_experience
+            - role_experience
+            - leadership_expectation
+            - responsibility
+            - company_signal
+            - location_constraint
+        actionable_items:
+          types:
+            - add_supporting_evidence
+            - clarify_scope
+            - prepare_interview_brief
+            - rewrite_resume_section
+            - prepare_architecture_story
+        chunks:
+          depends_on:
+            - deterministic_view
+            - signals
+            - actionable_items
+          fallback_artifact_types:
+            - job_description
+            - resume
+            - personal_story
   - id: interview_prep
     display_name: Interview Prep
     description: Interview themes, supporting stories, topics, and concerns.
+    context:
+      limits:
+        chunks: 18
+        signals: 24
+        actionable_items: 6
+        chunk_chars: 900
+        source_excerpt_chars: 300
+      nodes:
+        deterministic_view: {}
+        artifacts:
+          types:
+            - job_description
+            - resume
+            - personal_story
+            - company_research
+            - interview_notes
+        signals:
+          types:
+            - technical_theme
+            - leadership_expectation
+            - company_signal
+            - story_situation
+            - story_action
+            - story_result
+            - technology
+            - technical_skill
+            - platform_experience
+            - open_question
+            - location_constraint
+            - compensation
+            - interviewer_concern
+            - interview_risk
+            - inferred_risk
+        actionable_items:
+          types:
+            - prepare_interview_brief
+            - prepare_architecture_story
+            - research_company_concerns
+        chunks:
+          depends_on:
+            - deterministic_view
+            - signals
+            - actionable_items
+          fallback_artifact_types:
+            - job_description
+            - resume
+            - personal_story
+            - company_research
+            - interview_notes
   - id: resume_positioning
     display_name: Resume Positioning
     description: Resume evidence and rewrite suggestions.
+    context:
+      limits:
+        chunks: 18
+        signals: 24
+        actionable_items: 6
+        chunk_chars: 900
+        source_excerpt_chars: 300
+      nodes:
+        deterministic_view: {}
+        artifacts:
+          types:
+            - job_description
+            - resume
+            - personal_story
+        signals:
+          types:
+            - role_expectation
+            - measurable_outcome
+            - technical_skill
+            - leadership_signal
+            - responsibility
+            - leadership_expectation
+            - interviewer_concern
+            - interview_risk
+            - technology
+            - platform_experience
+        actionable_items:
+          types:
+            - rewrite_resume_section
+            - add_supporting_evidence
+        chunks:
+          depends_on:
+            - deterministic_view
+            - signals
+            - actionable_items
+          fallback_artifact_types:
+            - job_description
+            - resume
+            - personal_story
   - id: application_pipeline
     display_name: Application Pipeline
     description: Opportunities, next actions, blockers, and follow-ups.
+    context:
+      limits:
+        chunks: 14
+        signals: 18
+        actionable_items: 10
+        chunk_chars: 700
+        source_excerpt_chars: 240
+      nodes:
+        deterministic_view: {}
+        artifacts:
+          types:
+            - job_description
+            - recruiter_message
+            - company_research
+            - follow_up_notes
+        signals:
+          types:
+            - company
+            - role_title
+            - interview_risk
+            - inferred_risk
+            - company_signal
+            - open_question
+        actionable_items:
+          types:
+            - prepare_interview_brief
+            - draft_recruiter_follow_up
+            - research_company_concerns
+            - clarify_compensation_expectations
+            - clarify_scope
+            - prepare_architecture_story
+        chunks:
+          depends_on:
+            - deterministic_view
+            - signals
+            - actionable_items
+          fallback_artifact_types:
+            - job_description
+            - recruiter_message
+            - company_research
+            - follow_up_notes
   - id: compensation_scope_risk
     display_name: Compensation and Scope Risk
     description: Compensation signals, scope risk, and judgment areas.
+    context:
+      limits:
+        chunks: 14
+        signals: 18
+        actionable_items: 6
+        chunk_chars: 700
+        source_excerpt_chars: 240
+      nodes:
+        deterministic_view: {}
+        artifacts:
+          types:
+            - job_description
+            - compensation_notes
+            - company_research
+            - recruiter_message
+        signals:
+          types:
+            - compensation
+            - unusual_scope_indicator
+            - inferred_risk
+            - role_title
+            - seniority
+            - company_signal
+            - open_question
+        actionable_items:
+          types:
+            - clarify_compensation_expectations
+            - clarify_scope
+            - research_company_concerns
+        chunks:
+          depends_on:
+            - deterministic_view
+            - signals
+            - actionable_items
+          fallback_artifact_types:
+            - job_description
+            - compensation_notes
+            - company_research
+            - recruiter_message
 extractors:
   - job-description-extractor
   - resume-extractor

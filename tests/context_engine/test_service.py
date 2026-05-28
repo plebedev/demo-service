@@ -113,6 +113,53 @@ def test_fake_domain_perspective_builder_and_task_generator_work() -> None:
     assert result.actionable_items[-1].item_type == "test_generated_task"
 
 
+def test_perspective_views_are_cached_until_regeneration() -> None:
+    service = build_service()
+    ingest_payload = IngestionRequest(
+        domain_id="test-domain",
+        artifact_type_id="note",
+        owner_type=OwnerType.INVITATION_CODE,
+        owner_id="42",
+        title="First source",
+        text="First perspective content",
+    )
+    service.ingest_artifact(ingest_payload)
+
+    generated = service.get_perspective(
+        domain_id="test-domain",
+        view_definition_id="test-summary",
+        owner_type=OwnerType.INVITATION_CODE,
+        owner_id="42",
+    )
+    assert generated.sections[0].content == "First perspective content"
+    assert generated.metadata["is_stale"] is False
+
+    service.ingest_artifact(
+        ingest_payload.model_copy(
+            update={"title": "Second source", "text": "Second perspective content"}
+        )
+    )
+    cached = service.get_perspective(
+        domain_id="test-domain",
+        view_definition_id="test-summary",
+        owner_type=OwnerType.INVITATION_CODE,
+        owner_id="42",
+    )
+    assert cached.sections[0].content == "First perspective content"
+    assert cached.metadata["is_stale"] is True
+    assert cached.metadata["current_artifact_count"] == 2
+
+    regenerated = service.get_perspective(
+        domain_id="test-domain",
+        view_definition_id="test-summary",
+        owner_type=OwnerType.INVITATION_CODE,
+        owner_id="42",
+        regenerate=True,
+    )
+    assert regenerated.metadata["is_stale"] is False
+    assert regenerated.metadata["source_artifact_count"] == 2
+
+
 def test_registered_artifact_ingestor_normalizes_payload_before_ingestion() -> None:
     service = build_service()
 

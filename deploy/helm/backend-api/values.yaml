@@ -60,6 +60,8 @@ configEnv:
   DEFAULT_WORKFLOW_KEY: "messy-notes-v1"
   WORKFLOW_CONFIG_DIR: "app/resources/workflows"
   POST_PROCESSOR_CONFIG_PATH: "app/resources/post_processors/post-processors.yaml"
+  CONTEXT_ENGINE_MODEL_CONFIG_PATH: "app/resources/context_engine/model-flows.yaml"
+  CONTEXT_ENGINE_EXECUTION_MODE: "hybrid"
   MAX_FILES_PER_RUN: "3"
   MAX_FILE_SIZE_BYTES: "5242880"
   MAX_EXTRACTED_TEXT_BYTES: "250000"

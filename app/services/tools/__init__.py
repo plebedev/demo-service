@@ -3,6 +3,7 @@
 from app.services.voice.tools import (
     assess_employer_readiness,
     end_conversation,
+    prepare_meeting_context,
     record_answer,
 )
 from app.workflows.tools import (
@@ -32,6 +33,7 @@ __all__ = [
     "load_run_context",
     "normalize_input",
     "persist_brief_draft",
+    "prepare_meeting_context",
     "record_answer",
     "split_into_sections",
 ]

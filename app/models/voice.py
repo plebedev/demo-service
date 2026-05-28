@@ -84,6 +84,9 @@ class VoicePersona(Base):
     tool_config_serialized: Mapped[str] = mapped_column(
         "tool_config_json", Text(), nullable=True
     )  # curated guidance: intake questions, scoring rules, recommendation templates
+    tool_names_serialized: Mapped[str] = mapped_column(
+        "tool_names_json", Text(), nullable=True
+    )  # JSON array of voice tool names enabled for this persona
     is_active: Mapped[bool] = mapped_column(
         Boolean, default=True, server_default="true", nullable=False
     )

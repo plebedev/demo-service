@@ -1,0 +1,61 @@
+default_mode: hybrid
+default_model_profile: fast_structured
+model_profiles:
+  fast_structured:
+    provider: openai
+    model: gpt-5-mini
+    temperature: 0.0
+    max_tokens: 4096
+    timeout: 120
+    structured_output: true
+  stronger_reasoning:
+    provider: anthropic
+    model: claude-haiku-4-5-20251001
+    temperature: 0.0
+    max_tokens: 4096
+    timeout: 120
+    structured_output: true
+flows:
+  - domain_id: job_search
+    flow_id: extraction
+    mode: hybrid
+    model_profile: fast_structured
+    steps:
+      - id: artifact_extraction
+        purpose: structured_extraction
+        prompt_template: job_search/prompts/artifact_extraction.md
+        prompt_version: job-search-artifact-extraction-v1
+  - domain_id: job_search
+    flow_id: perspective_synthesis
+    mode: hybrid
+    model_profile: stronger_reasoning
+    steps:
+      - id: role_fit
+        purpose: perspective_synthesis
+        prompt_template: job_search/prompts/perspective_synthesis.md
+        prompt_version: job-search-perspective-synthesis-v1
+      - id: interview_prep
+        purpose: perspective_synthesis
+        prompt_template: job_search/prompts/perspective_synthesis.md
+        prompt_version: job-search-perspective-synthesis-v1
+      - id: resume_positioning
+        purpose: perspective_synthesis
+        prompt_template: job_search/prompts/perspective_synthesis.md
+        prompt_version: job-search-perspective-synthesis-v1
+      - id: application_pipeline
+        purpose: perspective_synthesis
+        prompt_template: job_search/prompts/perspective_synthesis.md
+        prompt_version: job-search-perspective-synthesis-v1
+      - id: compensation_scope_risk
+        purpose: perspective_synthesis
+        prompt_template: job_search/prompts/perspective_synthesis.md
+        prompt_version: job-search-perspective-synthesis-v1
+  - domain_id: job_search
+    flow_id: actionable_item_synthesis
+    mode: hybrid
+    model_profile: fast_structured
+    steps:
+      - id: actionable_items
+        purpose: actionable_item_synthesis
+        prompt_template: job_search/prompts/actionable_item_synthesis.md
+        prompt_version: job-search-actionable-item-synthesis-v1

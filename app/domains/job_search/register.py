@@ -16,6 +16,12 @@ from app.domains.job_search.extractors import (
     PersonalStoryExtractor,
     ResumeExtractor,
 )
+from app.domains.job_search.llm import (
+    LLMAssistedExtractor,
+    LLMAssistedPerspectiveBuilder,
+    LLMAssistedTaskGenerator,
+    PerspectiveContextGraph,
+)
 from app.domains.job_search.perspectives import (
     ApplicationPipelinePerspectiveBuilder,
     CompensationScopeRiskPerspectiveBuilder,
@@ -65,20 +71,35 @@ def build_job_search_domain_pack() -> DomainPack:
             for entry in artifact_type_entries
         ],
         extractors=[
-            JobDescriptionExtractor(),
-            ResumeExtractor(),
-            InterviewNotesExtractor(),
-            PersonalStoryExtractor(),
-            CareerContextNotesExtractor(),
+            LLMAssistedExtractor(JobDescriptionExtractor()),
+            LLMAssistedExtractor(ResumeExtractor()),
+            LLMAssistedExtractor(InterviewNotesExtractor()),
+            LLMAssistedExtractor(PersonalStoryExtractor()),
+            LLMAssistedExtractor(CareerContextNotesExtractor()),
         ],
         perspective_builders=[
-            RoleFitPerspectiveBuilder(),
-            InterviewPrepPerspectiveBuilder(),
-            ResumePositioningPerspectiveBuilder(),
-            ApplicationPipelinePerspectiveBuilder(),
-            CompensationScopeRiskPerspectiveBuilder(),
+            LLMAssistedPerspectiveBuilder(
+                RoleFitPerspectiveBuilder(),
+                _context_graph_for_view(view_entries, "role_fit"),
+            ),
+            LLMAssistedPerspectiveBuilder(
+                InterviewPrepPerspectiveBuilder(),
+                _context_graph_for_view(view_entries, "interview_prep"),
+            ),
+            LLMAssistedPerspectiveBuilder(
+                ResumePositioningPerspectiveBuilder(),
+                _context_graph_for_view(view_entries, "resume_positioning"),
+            ),
+            LLMAssistedPerspectiveBuilder(
+                ApplicationPipelinePerspectiveBuilder(),
+                _context_graph_for_view(view_entries, "application_pipeline"),
+            ),
+            LLMAssistedPerspectiveBuilder(
+                CompensationScopeRiskPerspectiveBuilder(),
+                _context_graph_for_view(view_entries, "compensation_scope_risk"),
+            ),
         ],
-        task_generators=[JobSearchTaskGenerator()],
+        task_generators=[LLMAssistedTaskGenerator(JobSearchTaskGenerator())],
         view_definitions=[
             ViewDefinition(
                 id=str(entry["id"]),
@@ -86,6 +107,9 @@ def build_job_search_domain_pack() -> DomainPack:
                 description=(
                     str(entry["description"]) if entry.get("description") else None
                 ),
+                metadata={
+                    "context_dependency_graph": entry.get("context", {}),
+                },
             )
             for entry in view_entries
         ],
@@ -93,6 +117,8 @@ def build_job_search_domain_pack() -> DomainPack:
             "domain_pack": str(manifest["id"]),
             "status": str(manifest.get("status", "mvp")),
             "source_grounded": bool(manifest.get("source_grounded", True)),
+            "execution_modes": ["deterministic", "llm", "hybrid"],
+            "llm_assisted": True,
             "unsupported_inputs": list(manifest.get("unsupported_inputs", [])),
             "extractor_routing": {
                 str(entry["id"]): list(entry.get("extractor_ids", []))
@@ -100,3 +126,25 @@ def build_job_search_domain_pack() -> DomainPack:
             },
         },
     )
+
+
+def _context_graph_for_view(
+    view_entries: list[Any], view_id: str
+) -> PerspectiveContextGraph:
+    """Load declarative context dependencies for one view."""
+    entry = next(
+        (
+            candidate
+            for candidate in view_entries
+            if isinstance(candidate, dict) and candidate.get("id") == view_id
+        ),
+        None,
+    )
+    if entry is None:
+        raise ValueError(f"Job Search view '{view_id}' is not configured.")
+    if "context" not in entry:
+        raise ValueError(f"Job Search view '{view_id}' is missing context graph.")
+    graph = PerspectiveContextGraph.model_validate(entry["context"])
+    graph.require_node_types("signals")
+    graph.require_node_types("actionable_items")
+    return graph

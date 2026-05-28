@@ -108,6 +108,7 @@ app/
 |       |-- chunking.py
 |       |-- factory.py
 |       |-- interfaces.py
+|       |-- llm.py
 |       |-- models.py
 |       |-- registry.py
 |       |-- service.py
@@ -144,6 +145,27 @@ Structured payloads are serialized into text columns rather than native JSON
 columns for Oracle compatibility. Derived records must carry source links; the
 SQLAlchemy repository rejects source-link-less outputs instead of silently
 dropping them. No graph database or separate vector database is used.
+
+Context Engine LLM steps reuse the existing PydanticAI model path in
+`app.services.model_factory`; no provider calls live in domain packs. Generic
+flow configuration is loaded from
+`app/resources/context_engine/model-flows.yaml`, keyed by `domain_id`,
+`flow_id`, `step_id`, and `purpose`. Domain packs own prompt templates and
+structured mapping. The `job_search` prompts live under
+`app/domains/job_search/prompts/`.
+
+Execution mode is controlled by `CONTEXT_ENGINE_EXECUTION_MODE`:
+
+- `deterministic`: skip model steps and keep rule-based output only
+- `llm`: prefer structured model output, falling back to deterministic output on failure
+- `hybrid`: keep deterministic output and add/refine with structured model output
+
+Model output is accepted only when it is source-grounded. LLM-generated signals,
+perspective sections, and actionable items must carry source references,
+confidence, explicit-vs-inferred classification, rationale, prompt version,
+model profile, and generation metadata. If a model step fails or returns
+ungrounded output, ingestion/view generation preserves deterministic output and
+marks fallback metadata instead of failing the whole experience.
 
 ### Job Search domain pack
 
@@ -304,6 +326,8 @@ Important variables:
 | `DEFAULT_WORKFLOW_KEY` | Workflow key assigned to newly created runs |
 | `WORKFLOW_CONFIG_DIR` | Directory containing workflow YAML definitions |
 | `POST_PROCESSOR_CONFIG_PATH` | YAML file defining workflow post-processors |
+| `CONTEXT_ENGINE_MODEL_CONFIG_PATH` | YAML file defining generic Context Engine model profiles and domain/flow/step selection |
+| `CONTEXT_ENGINE_EXECUTION_MODE` | Context Engine model mode: `deterministic`, `llm`, or `hybrid`; default `hybrid` |
 | `MAX_FILES_PER_RUN` | Limit for files per run |
 | `MAX_FILE_SIZE_BYTES` | Limit for file upload size |
 | `MAX_EXTRACTED_TEXT_BYTES` | Total extracted-text budget kept from accepted files |
@@ -552,6 +576,22 @@ OLLAMA_API_KEY=ollama
 ```
 
 Runtime execution builds on workflow config instead of introducing a separate planner.
+
+## Context Engine model config
+
+Context Engine model-backed steps are configured separately from messy-notes
+workflow agents:
+
+- `app/resources/context_engine/model-flows.yaml`
+- `CONTEXT_ENGINE_MODEL_CONFIG_PATH` selects the catalog file
+- `CONTEXT_ENGINE_EXECUTION_MODE` can force `deterministic`, `llm`, or `hybrid`
+
+The catalog maps `domain_id` + `flow_id` + `step_id` to a model profile. For
+`job_search`, the configured flows are `extraction`,
+`perspective_synthesis`, and `actionable_item_synthesis`. Future domains can add
+their own flows without changing `app/core/context_engine/` code, as long as
+their domain pack maps structured outputs back to generic Context Engine
+primitives and enforces source links.
 
 ## Current TODOs
 
@@ -1057,6 +1097,19 @@ REVISION=1 task rollback
 - The recommended service for the backend API is the `..._tp` service, not `..._high`.
 - The backend currently expects the read/write user in production, such as `APP_RW`.
 - The starter schema uses generic SQLAlchemy types to avoid obvious cross-dialect issues, but you should still test future migrations against Oracle before relying on local Postgres behavior alone.
+
+## Voice Meeting Prep limitations
+
+The Meeting Prep voice tool is intentionally not a live research tool. It does
+not browse the web, verify current company facts, use private CRM/account data,
+or return source links. It uses the company name, meeting purpose, optional
+caller details, and general model knowledge to produce preparation hypotheses.
+
+This is a conscious demo trade-off: the feature demonstrates async Realtime
+tool-result injection and voice continuity while keeping external data
+dependencies out of scope. The advisor should say it is preparing context from
+what the user shared and general background knowledge, not that it looked up or
+verified current company information.
 
 ## Internal admin helper
 

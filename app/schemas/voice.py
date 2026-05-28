@@ -33,6 +33,13 @@ class VoicePersonaCreateRequest(BaseModel):
             "JSON or structured text embedded in the persona."
         ),
     )
+    tool_names: list[str] | None = Field(
+        default=None,
+        description=(
+            "Explicit voice tool names enabled for this persona. "
+            "Null preserves the legacy default tool set."
+        ),
+    )
 
 
 class VoicePersonaUpdateRequest(BaseModel):
@@ -54,6 +61,10 @@ class VoicePersonaUpdateRequest(BaseModel):
         max_length=32000,
         description="Updated curated guidance",
     )
+    tool_names: list[str] | None = Field(
+        default=None,
+        description="Updated explicit voice tool names for this persona",
+    )
 
 
 class VoicePersonaResponse(BaseModel):
@@ -65,6 +76,7 @@ class VoicePersonaResponse(BaseModel):
     instructions: str = Field(description="System-level instructions")
     capabilities: str | None = Field(description="Capabilities description")
     tool_config: str | None = Field(description="Curated guidance JSON")
+    tool_names: list[str] = Field(description="Enabled voice tool names")
     is_active: bool = Field(description="Whether the persona is active")
     created_at: datetime = Field(description="When the persona was created")
     updated_at: datetime = Field(description="When the persona was last updated")
@@ -126,6 +138,20 @@ class VoiceProvidersResponse(BaseModel):
     """List of available voice providers and their voices."""
 
     providers: list[VoiceProviderInfo]
+
+
+class VoiceToolInfo(BaseModel):
+    """A voice tool that can be enabled for a persona."""
+
+    name: str = Field(description="Registered tool name")
+    description: str = Field(description="Model-facing tool description")
+    is_terminal: bool = Field(description="Whether this tool ends the call flow")
+
+
+class VoiceToolsResponse(BaseModel):
+    """List of voice tools available to persona configuration."""
+
+    tools: list[VoiceToolInfo]
 
 
 class VoiceConversationSummary(BaseModel):

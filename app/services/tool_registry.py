@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
+import asyncio
+import inspect
 import json
 from typing import Any, Callable, TypeVar
 
@@ -64,6 +66,23 @@ class ToolRegistryEntry:
         """Validate dict args, execute a voice-style tool, and return JSON."""
         validated = self.input_model.model_validate(args)
         result = self.implementation(validated, tool_config)
+        if isinstance(result, BaseModel):
+            return result.model_dump_json()
+        return json.dumps(result)
+
+    async def execute_json_async(
+        self, args: dict[str, Any], tool_config: dict[str, Any]
+    ) -> str:
+        """Validate dict args, execute a voice-style tool off the event loop."""
+        validated = self.input_model.model_validate(args)
+        if inspect.iscoroutinefunction(self.implementation):
+            result = await self.implementation(validated, tool_config)
+        else:
+            result = await asyncio.to_thread(
+                self.implementation, validated, tool_config
+            )
+        if inspect.isawaitable(result):
+            result = await result
         if isinstance(result, BaseModel):
             return result.model_dump_json()
         return json.dumps(result)
@@ -167,6 +186,12 @@ class ToolRegistry:
     ) -> str:
         """Execute one registered JSON/function-call style tool."""
         return self.get(name).execute_json(args, tool_config)
+
+    async def execute_json_async(
+        self, name: str, args: dict[str, Any], tool_config: dict[str, Any]
+    ) -> str:
+        """Execute one registered JSON/function-call style tool asynchronously."""
+        return await self.get(name).execute_json_async(args, tool_config)
 
 
 WorkflowToolRegistry = ToolRegistry
