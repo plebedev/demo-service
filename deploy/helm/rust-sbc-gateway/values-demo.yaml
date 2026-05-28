@@ -7,6 +7,6 @@ image:
 hostNetwork: true
 
 configEnv:
-  SBC_ADVERTISE_HOST: ""
+  SBC_ADVERTISE_HOST: "129.80.152.84"
   SBC_RTP_START_PORT: "10000"
   SBC_RTP_END_PORT: "10100"
