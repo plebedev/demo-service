@@ -118,7 +118,31 @@ pub fn build_sip_200_ok_for_invite(
     local_rtp_port: u16,
 ) -> Option<String> {
     let sdp = build_sdp_offer(local_host, local_rtp_port);
-    build_response_for_request(request, 200, "OK", Some(local_tag), Some(&sdp))
+    let via = request.headers.get("via")?;
+    let from = request.headers.get("from")?;
+    let to = request.headers.get("to")?;
+    let call_id = request.headers.get("call-id")?;
+    let cseq = request.headers.get("cseq")?;
+    let to_value = if to.to_ascii_lowercase().contains(";tag=") {
+        to.to_string()
+    } else {
+        format!("{};tag={}", to, local_tag)
+    };
+    let contact = format!("<sip:sbc@{}:5060>", local_host);
+
+    let mut lines = vec![
+        "SIP/2.0 200 OK".to_string(),
+        format!("Via: {}", via),
+        format!("From: {}", from),
+        format!("To: {}", to_value),
+        format!("Call-ID: {}", call_id),
+        format!("CSeq: {}", cseq),
+        format!("Contact: {}", contact),
+        "Content-Type: application/sdp".to_string(),
+        format!("Content-Length: {}", sdp.len()),
+    ];
+
+    Some(build_sip_message(&mut lines, Some(&sdp)))
 }
 
 pub fn build_sip_final_response_for_invite(
@@ -649,6 +673,7 @@ mod tests {
         let response = build_sip_200_ok_for_invite(&parsed, "localtag", "129.80.152.84", 10000)
             .expect("response");
         assert!(response.contains("To: <sip:demo@example.com>;tag=localtag"));
+        assert!(response.contains("Contact: <sip:sbc@129.80.152.84:5060>"));
         assert!(response.contains("m=audio 10000 RTP/AVP 0 8 101"));
     }
 

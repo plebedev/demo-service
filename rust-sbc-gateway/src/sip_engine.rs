@@ -19,8 +19,7 @@ use crate::sip::{
     build_sip_200_ok_for_invite, build_sip_final_response_for_invite, build_sip_invite,
     build_sip_ringing_for_invite, build_sip_trying_for_invite, extract_media_addr_from_sdp,
     extract_uri_from_name_addr, parse_sip_request, parse_sip_status_code, parse_sip_status_line,
-    response_destination_from_via, sip_header_value, InboundDialogSignaling, SipInvite,
-    SipInviteRequest,
+    sip_header_value, InboundDialogSignaling, SipInvite, SipInviteRequest,
 };
 
 #[derive(Debug)]
@@ -539,9 +538,7 @@ async fn handle_inbound_request(
             metrics
                 .sip_bye_requests_total
                 .fetch_add(1, Ordering::Relaxed);
-            let via = request.headers.get("via").cloned().unwrap_or_default();
-            let destination =
-                response_destination_from_via(&via, source_addr).unwrap_or(source_addr);
+            let destination = source_addr;
             let cseq = request
                 .headers
                 .get("cseq")
@@ -703,11 +700,7 @@ fn response_target_for_request(
     request: &crate::sip::SipParsedRequest,
     source_addr: SocketAddr,
 ) -> SocketAddr {
-    if let Some(via) = request.headers.get("via") {
-        if let Some(destination) = response_destination_from_via(via, source_addr) {
-            return destination;
-        }
-    }
+    let _ = request;
     source_addr
 }
 
