@@ -7,6 +7,8 @@ metadata:
     {{- include "rust-sbc-gateway.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.replicaCount }}
+  strategy:
+    type: {{ .Values.deploymentStrategy.type }}
   selector:
     matchLabels:
       {{- include "rust-sbc-gateway.selectorLabels" . | nindent 6 }}
