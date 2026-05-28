@@ -40,6 +40,7 @@ routing.
   plus demo-run creation, retrieval, editing, submission, and deterministic ingestion coverage
 - Production Dockerfile
 - Rust `text-tools/` sidecar for internal deterministic text operations
+- Rust `rust-sbc-gateway/` infrastructure service for SIP/RTP transfer experiments
 - `local/` Docker Compose for Postgres-backed local development
 - `deploy/` Helm chart and VM ship-deploy scripts
 - Poetry for Python dependency management
@@ -61,10 +62,12 @@ routing.
 |   |   `-- test_domain/
 |   `-- models/
 |-- text-tools/
+|-- rust-sbc-gateway/
 |-- deploy/
 |   |-- helm/
 |   |   |-- backend-api/
-|   |   `-- text-tools/
+|   |   |-- text-tools/
+|   |   `-- rust-sbc-gateway/
 |   `-- scripts/
 `-- local/
     |-- docker-compose.yaml
@@ -80,7 +83,7 @@ routing.
 - Alembic
 - Postgres for local development
 - Oracle Autonomous Database via walletless TLS in deployed environments
-- Rust / Axum for the internal `demo-text-tools` sidecar
+- Rust / Axum for the internal `demo-text-tools` sidecar and `rust-sbc-gateway` service
 
 ## Context Engine infrastructure
 
@@ -281,9 +284,9 @@ task text-tools:lint
 task service:build SERVICE=text-tools
 ```
 
-Deployment scripts accept `SERVICE=backend-api`, `SERVICE=text-tools`, or
-`SERVICE=all`. For `SERVICE=all`, the Rust sidecar is built and deployed before
-the Python backend:
+Deployment scripts accept `SERVICE=backend-api`, `SERVICE=text-tools`,
+`SERVICE=rust-sbc-gateway`, or `SERVICE=all`. For `SERVICE=all`, both Rust
+services are built and deployed before the Python backend:
 
 ```bash
 task docker-build SERVICE=all
@@ -292,6 +295,29 @@ task ship-deploy SERVICE=all
 ```
 
 The sidecar Helm chart is internal-only and does not create ingress.
+
+## Rust SBC gateway
+
+`rust-sbc-gateway/` is an infrastructure-only Rust SIP/RTP service for warm-transfer
+experiments. It is intentionally decoupled from existing backend voice APIs for
+phase-1 infrastructure validation.
+
+It currently provides:
+
+- UDP SIP signaling engine and raw INVITE construction
+- RTP packetization for G.711 μ-law payloads
+- Twilio-style WebSocket media parsing and state-based routing behavior
+- in-memory call session registry with warm-transfer states
+- internal control endpoints for session updates and transfer initiation
+- Prometheus-compatible metrics endpoint
+
+Useful checks:
+
+```bash
+task rust-sbc-gateway:test
+task rust-sbc-gateway:lint
+task service:build SERVICE=rust-sbc-gateway
+```
 
 ## Configuration
 

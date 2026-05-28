@@ -8,13 +8,17 @@ DEPLOY_ROOT="$(cd "${RELEASE_DIR}/../.." && pwd)"
 SOURCE_ARCHIVE_NAME="${SOURCE_ARCHIVE_NAME:-source.tgz}"
 BACKEND_IMAGE_ARCHIVE_NAME="${BACKEND_IMAGE_ARCHIVE_NAME:-${IMAGE_ARCHIVE_NAME:-image.tar}}"
 TEXT_TOOLS_IMAGE_ARCHIVE_NAME="${TEXT_TOOLS_IMAGE_ARCHIVE_NAME:-text-tools-image.tar}"
+RUST_SBC_IMAGE_ARCHIVE_NAME="${RUST_SBC_IMAGE_ARCHIVE_NAME:-rust-sbc-gateway-image.tar}"
 RELEASE_NAME="${RELEASE_NAME:-backend-api}"
 TEXT_TOOLS_RELEASE_NAME="${TEXT_TOOLS_RELEASE_NAME:-demo-text-tools}"
+RUST_SBC_RELEASE_NAME="${RUST_SBC_RELEASE_NAME:-demo-rust-sbc-gateway}"
 NAMESPACE="${NAMESPACE:-demo}"
 VALUES_FILE="${VALUES_FILE:-deploy/helm/backend-api/values-demo.yaml}"
 TEXT_TOOLS_VALUES_FILE="${TEXT_TOOLS_VALUES_FILE:-deploy/helm/text-tools/values-demo.yaml}"
+RUST_SBC_VALUES_FILE="${RUST_SBC_VALUES_FILE:-deploy/helm/rust-sbc-gateway/values-demo.yaml}"
 IMAGE_REPOSITORY="${IMAGE_REPOSITORY:-backend-api}"
 TEXT_TOOLS_IMAGE_REPOSITORY="${TEXT_TOOLS_IMAGE_REPOSITORY:-demo-text-tools}"
+RUST_SBC_IMAGE_REPOSITORY="${RUST_SBC_IMAGE_REPOSITORY:-demo-rust-sbc-gateway}"
 SERVICE="${SERVICE:-backend-api}"
 IMAGE_TAG="${IMAGE_TAG:-}"
 IMPORT_IMAGE_COMMAND="${IMPORT_IMAGE_COMMAND:-sudo k3s ctr images import}"
@@ -87,6 +91,26 @@ deploy_text_tools() {
   kubectl get svc,deployment,pods -n "${NAMESPACE}" -l "app.kubernetes.io/instance=${TEXT_TOOLS_RELEASE_NAME}"
 }
 
+deploy_rust_sbc_gateway() {
+  require_image "${RUST_SBC_IMAGE_ARCHIVE_NAME}"
+  require_values "${RUST_SBC_VALUES_FILE}"
+  ${IMPORT_IMAGE_COMMAND} "${DEPLOY_ROOT}/artifacts/images/${RUST_SBC_IMAGE_ARCHIVE_NAME}"
+
+  helm upgrade --install "${RUST_SBC_RELEASE_NAME}" "${RELEASE_DIR}/deploy/helm/rust-sbc-gateway" \
+    --namespace "${NAMESPACE}" \
+    --create-namespace \
+    -f "${RELEASE_DIR}/deploy/helm/rust-sbc-gateway/values.yaml" \
+    -f "${RELEASE_DIR}/${RUST_SBC_VALUES_FILE}" \
+    --set-string namespace="${NAMESPACE}" \
+    --set-string image.repository="${RUST_SBC_IMAGE_REPOSITORY}" \
+    --set-string image.tag="${IMAGE_TAG}" \
+    --set-string image.pullPolicy="IfNotPresent" \
+    --wait \
+    --timeout 5m
+
+  kubectl get svc,deployment,pods -n "${NAMESPACE}" -l "app.kubernetes.io/instance=${RUST_SBC_RELEASE_NAME}"
+}
+
 export KUBECONFIG="${KUBECONFIG_PATH}"
 
 case "${SERVICE}" in
@@ -96,12 +120,16 @@ case "${SERVICE}" in
   text-tools)
     deploy_text_tools
     ;;
+  rust-sbc-gateway)
+    deploy_rust_sbc_gateway
+    ;;
   all)
     deploy_text_tools
+    deploy_rust_sbc_gateway
     deploy_backend_api
     ;;
   *)
-    echo "Unknown SERVICE: ${SERVICE}. Use backend-api, text-tools, or all."
+    echo "Unknown SERVICE: ${SERVICE}. Use backend-api, text-tools, rust-sbc-gateway, or all."
     exit 1
     ;;
 esac

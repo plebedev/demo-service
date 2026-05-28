@@ -1,0 +1,12 @@
+namespace: demo
+
+image:
+  repository: demo-rust-sbc-gateway
+  pullPolicy: IfNotPresent
+
+hostNetwork: true
+
+configEnv:
+  SBC_ADVERTISE_HOST: "openclaw.lebedev.ai"
+  SBC_RTP_START_PORT: "10000"
+  SBC_RTP_END_PORT: "10100"

@@ -1,0 +1,8 @@
+1. Access health:
+   kubectl -n {{ .Values.namespace }} get pods -l app.kubernetes.io/instance={{ .Release.Name }}
+
+2. Access metrics via service:
+   kubectl -n {{ .Values.namespace }} port-forward svc/{{ include "rust-sbc-gateway.fullname" . }} {{ .Values.service.controlPort }}:{{ .Values.service.controlPort }}
+   curl -s http://127.0.0.1:{{ .Values.service.controlPort }}/metrics
+
+3. SIP UDP and RTP use host networking. Ensure node firewall allows UDP 5060 and {{ .Values.configEnv.SBC_RTP_START_PORT }}-{{ .Values.configEnv.SBC_RTP_END_PORT }}.
