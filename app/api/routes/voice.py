@@ -70,6 +70,7 @@ VOICE_TOOL_NAMES = [
     "end_conversation",
     "prepare_meeting_context",
     "record_answer",
+    "warm_transfer_call",
 ]
 
 # Singleton registry built once at import time — stateless, shared across requests.
@@ -766,7 +767,12 @@ async def _handle_xai_to_twilio(
                 if entry.is_terminal:
                     close_after_response = True
                 else:
-                    tool_config = session.persona_tool_config if session else {}
+                    tool_config = dict(session.persona_tool_config) if session else {}
+                    runtime = tool_config.get("_runtime")
+                    if not isinstance(runtime, dict):
+                        runtime = {}
+                    runtime["session_id"] = call_sid_ref[0] or ""
+                    tool_config["_runtime"] = runtime
                     task = asyncio.create_task(
                         run_tool_call(call_id, entry, args, tool_config)
                     )

@@ -16,3 +16,4 @@ dist/
 .idea
 local/.env.backend
 local/.env.postgres
+rust-sbc-gateway/target/

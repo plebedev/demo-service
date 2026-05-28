@@ -1,0 +1,55 @@
+namespace: demo
+
+replicaCount: 1
+
+image:
+  repository: demo-rust-sbc-gateway
+  tag: "dev"
+  pullPolicy: IfNotPresent
+
+deploymentStrategy:
+  type: Recreate
+
+hostNetwork: true
+dnsPolicy: ClusterFirstWithHostNet
+
+service:
+  type: ClusterIP
+  controlPort: 8082
+  controlTargetPort: 8082
+  wsPort: 8083
+  wsTargetPort: 8083
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 1000m
+    memory: 512Mi
+
+probes:
+  livenessPath: /health
+  readinessPath: /health
+  initialDelaySeconds: 5
+  periodSeconds: 10
+  timeoutSeconds: 2
+  failureThreshold: 3
+
+configEnv:
+  SBC_CONTROL_BIND: "0.0.0.0:8082"
+  SBC_WS_BIND: "0.0.0.0:8083"
+  SBC_SIP_BIND: "0.0.0.0:5060"
+  SBC_ADVERTISE_HOST: ""
+  SBC_RTP_START_PORT: "10000"
+  SBC_RTP_END_PORT: "10100"
+  SBC_TRUNK_PORT: "5060"
+  SBC_BACKEND_VOICE_WS_URL: "ws://backend-api.demo.svc.cluster.local/api/voice/stream"
+  SBC_WS_CONNECT_TIMEOUT_MS: "3000"
+  SBC_CALL_SETUP_TIMEOUT_MS: "7000"
+  SBC_SIP_RINGING_ENABLED: "true"
+  SBC_CALLSID_PREFIX: "rust"
+  RUST_LOG: "info"
+
+nameOverride: ""
+fullnameOverride: ""

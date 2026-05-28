@@ -6,11 +6,14 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 RELEASE_NAME="${RELEASE_NAME:-backend-api}"
 TEXT_TOOLS_RELEASE_NAME="${TEXT_TOOLS_RELEASE_NAME:-demo-text-tools}"
+RUST_SBC_RELEASE_NAME="${RUST_SBC_RELEASE_NAME:-demo-rust-sbc-gateway}"
 NAMESPACE="${NAMESPACE:-demo}"
 VALUES_FILE="${VALUES_FILE:-${REPO_ROOT}/deploy/helm/backend-api/values-demo.yaml}"
 TEXT_TOOLS_VALUES_FILE="${TEXT_TOOLS_VALUES_FILE:-${REPO_ROOT}/deploy/helm/text-tools/values-demo.yaml}"
+RUST_SBC_VALUES_FILE="${RUST_SBC_VALUES_FILE:-${REPO_ROOT}/deploy/helm/rust-sbc-gateway/values-demo.yaml}"
 IMAGE_REPOSITORY="${IMAGE_REPOSITORY:-backend-api}"
 TEXT_TOOLS_IMAGE_REPOSITORY="${TEXT_TOOLS_IMAGE_REPOSITORY:-demo-text-tools}"
+RUST_SBC_IMAGE_REPOSITORY="${RUST_SBC_IMAGE_REPOSITORY:-demo-rust-sbc-gateway}"
 SERVICE="${SERVICE:-backend-api}"
 DEPLOY_TARGET="${DEPLOY_TARGET:-}"
 DEPLOY_PATH="${DEPLOY_PATH:-/home/ubuntu/backend-api-deploy}"
@@ -29,6 +32,7 @@ OPERATIONAL_PATHS=(
   deploy
   local
   text-tools
+  rust-sbc-gateway
   pyproject.toml
 )
 
@@ -57,6 +61,7 @@ IMAGE_TAG="${IMAGE_TAG:-$(git -C "${REPO_ROOT}" rev-parse --short HEAD)}"
 SOURCE_ARCHIVE_NAME="${SOURCE_ARCHIVE_NAME:-source-${IMAGE_TAG}.tgz}"
 BACKEND_IMAGE_ARCHIVE_NAME="${BACKEND_IMAGE_ARCHIVE_NAME:-${IMAGE_ARCHIVE_NAME:-image-${IMAGE_TAG}.tar}}"
 TEXT_TOOLS_IMAGE_ARCHIVE_NAME="${TEXT_TOOLS_IMAGE_ARCHIVE_NAME:-text-tools-image-${IMAGE_TAG}.tar}"
+RUST_SBC_IMAGE_ARCHIVE_NAME="${RUST_SBC_IMAGE_ARCHIVE_NAME:-rust-sbc-gateway-image-${IMAGE_TAG}.tar}"
 REMOTE_RELEASE_DIR="${DEPLOY_PATH}/releases/${IMAGE_TAG}"
 
 echo "Running local checks"
@@ -68,12 +73,16 @@ case "${SERVICE}" in
   text-tools)
     helm lint "${REPO_ROOT}/deploy/helm/text-tools"
     ;;
+  rust-sbc-gateway)
+    helm lint "${REPO_ROOT}/deploy/helm/rust-sbc-gateway"
+    ;;
   all)
     helm lint "${REPO_ROOT}/deploy/helm/text-tools"
+    helm lint "${REPO_ROOT}/deploy/helm/rust-sbc-gateway"
     helm lint "${REPO_ROOT}/deploy/helm/backend-api"
     ;;
   *)
-    echo "Unknown SERVICE: ${SERVICE}. Use backend-api, text-tools, or all."
+    echo "Unknown SERVICE: ${SERVICE}. Use backend-api, text-tools, rust-sbc-gateway, or all."
     exit 1
     ;;
 esac
@@ -81,13 +90,16 @@ esac
 SERVICE="${SERVICE}" \
 IMAGE_REPOSITORY="${IMAGE_REPOSITORY}" \
 TEXT_TOOLS_IMAGE_REPOSITORY="${TEXT_TOOLS_IMAGE_REPOSITORY}" \
+RUST_SBC_IMAGE_REPOSITORY="${RUST_SBC_IMAGE_REPOSITORY}" \
 bash "${SCRIPT_DIR}/build-image.sh" "${IMAGE_TAG}"
 
 SERVICE="${SERVICE}" \
 IMAGE_REPOSITORY="${IMAGE_REPOSITORY}" \
 TEXT_TOOLS_IMAGE_REPOSITORY="${TEXT_TOOLS_IMAGE_REPOSITORY}" \
+RUST_SBC_IMAGE_REPOSITORY="${RUST_SBC_IMAGE_REPOSITORY}" \
 BACKEND_IMAGE_ARCHIVE_NAME="${BACKEND_IMAGE_ARCHIVE_NAME}" \
 TEXT_TOOLS_IMAGE_ARCHIVE_NAME="${TEXT_TOOLS_IMAGE_ARCHIVE_NAME}" \
+RUST_SBC_IMAGE_ARCHIVE_NAME="${RUST_SBC_IMAGE_ARCHIVE_NAME}" \
 bash "${SCRIPT_DIR}/copy-deploy-bundle.sh" "${IMAGE_TAG}"
 
 ssh ${SSH_OPTS} "${DEPLOY_TARGET}" \
@@ -99,13 +111,17 @@ ssh ${SSH_OPTS} "${DEPLOY_TARGET}" \
    SOURCE_ARCHIVE_NAME='${SOURCE_ARCHIVE_NAME}' \
    BACKEND_IMAGE_ARCHIVE_NAME='${BACKEND_IMAGE_ARCHIVE_NAME}' \
    TEXT_TOOLS_IMAGE_ARCHIVE_NAME='${TEXT_TOOLS_IMAGE_ARCHIVE_NAME}' \
+   RUST_SBC_IMAGE_ARCHIVE_NAME='${RUST_SBC_IMAGE_ARCHIVE_NAME}' \
    RELEASE_NAME='${RELEASE_NAME}' \
    TEXT_TOOLS_RELEASE_NAME='${TEXT_TOOLS_RELEASE_NAME}' \
+   RUST_SBC_RELEASE_NAME='${RUST_SBC_RELEASE_NAME}' \
    NAMESPACE='${NAMESPACE}' \
    VALUES_FILE='${VALUES_FILE##${REPO_ROOT}/}' \
    TEXT_TOOLS_VALUES_FILE='${TEXT_TOOLS_VALUES_FILE##${REPO_ROOT}/}' \
+   RUST_SBC_VALUES_FILE='${RUST_SBC_VALUES_FILE##${REPO_ROOT}/}' \
    IMAGE_REPOSITORY='${IMAGE_REPOSITORY}' \
    TEXT_TOOLS_IMAGE_REPOSITORY='${TEXT_TOOLS_IMAGE_REPOSITORY}' \
+   RUST_SBC_IMAGE_REPOSITORY='${RUST_SBC_IMAGE_REPOSITORY}' \
    IMAGE_TAG='${IMAGE_TAG}' \
    SERVICE='${SERVICE}' \
    RELEASE_DIR='${REMOTE_RELEASE_DIR}' \

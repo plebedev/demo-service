@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "rust-sbc-gateway.fullname" . }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "rust-sbc-gateway.labels" . | nindent 4 }}
+data:
+  {{- range $key, $value := .Values.configEnv }}
+  {{ $key }}: {{ $value | quote }}
+  {{- end }}

@@ -614,6 +614,7 @@ def test_voice_tools_are_registered_in_shared_tool_registry() -> None:
     assert registry.get("assess_employer_readiness").is_terminal is False
     assert registry.get("record_answer").is_terminal is False
     assert registry.get("end_conversation").is_terminal is True
+    assert registry.get("warm_transfer_call").is_terminal is False
 
 
 def test_record_answer_returns_recorded_status() -> None:
@@ -673,6 +674,76 @@ def test_voice_tools_endpoint_lists_meeting_prep_tool(client: TestClient) -> Non
     meeting_tool = next(t for t in tools if t["name"] == "prepare_meeting_context")
     assert meeting_tool["is_terminal"] is False
     assert "live web lookup" in meeting_tool["description"].lower()
+    transfer_tool = next(t for t in tools if t["name"] == "warm_transfer_call")
+    assert transfer_tool["is_terminal"] is False
+    assert "warm transfer" in transfer_tool["description"].lower()
+
+
+def test_warm_transfer_call_rejects_non_e164_input() -> None:
+    """warm_transfer_call enforces strict E.164 input format."""
+    from pydantic import ValidationError
+
+    from app.services.tool_registry import build_tool_registry
+
+    registry = build_tool_registry()
+    with pytest.raises(ValidationError):
+        registry.execute_json(
+            "warm_transfer_call",
+            {"transfer_to_phone_number": "6177100171"},
+            {},
+        )
+
+
+def test_warm_transfer_call_posts_to_sbc_gateway(monkeypatch) -> None:
+    """warm_transfer_call sends the expected payload to the SBC control endpoint."""
+    from app.services.tool_registry import build_tool_registry
+    from app.services.voice import tools as voice_tools
+
+    captured: dict[str, object] = {}
+
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            return
+
+    def fake_post(url: str, json: dict[str, object], timeout: float):  # type: ignore[override]
+        captured["url"] = url
+        captured["json"] = json
+        captured["timeout"] = timeout
+        return FakeResponse()
+
+    monkeypatch.setattr(voice_tools.httpx, "post", fake_post)
+
+    registry = build_tool_registry()
+    raw = registry.execute_json(
+        "warm_transfer_call",
+        {"transfer_to_phone_number": "+16177100171"},
+        {
+            "warm_transfer": {
+                "gateway_base_url": "http://rust-sbc-gateway.demo.svc.cluster.local:8082",
+                "trunk_host": "peter-voice-demo.sip.twilio.com",
+                "twilio_number": "+17817346618",
+                "trunk_port": 5060,
+                "timeout_seconds": 7.5,
+            },
+            "_runtime": {"session_id": "CA123456789"},
+        },
+    )
+    payload = json.loads(raw)
+
+    assert payload["status"] == "started"
+    assert payload["session_id"] == "CA123456789"
+    assert captured["url"] == (
+        "http://rust-sbc-gateway.demo.svc.cluster.local:8082"
+        "/api/internal/transfer/start"
+    )
+    assert captured["timeout"] == 7.5
+    assert captured["json"] == {
+        "session_id": "CA123456789",
+        "target_phone": "+16177100171",
+        "twilio_number": "+17817346618",
+        "trunk_host": "peter-voice-demo.sip.twilio.com",
+        "trunk_port": 5060,
+    }
 
 
 def test_prepare_meeting_context_tool_returns_limitations(monkeypatch) -> None:

@@ -8,6 +8,7 @@ import logging
 import time
 from typing import Any
 
+import httpx
 from pydantic import BaseModel, Field
 
 from app.core.config import get_settings
@@ -201,6 +202,36 @@ class PrepareMeetingContextOutput(BaseModel):
     limitations: str
 
 
+class WarmTransferCallInput(BaseModel):
+    """Transfer target provided by the caller during a live voice session."""
+
+    transfer_to_phone_number: str = Field(
+        description=(
+            "Phone number to transfer to, in strict E.164 format "
+            "(example: +16177100171)."
+        ),
+        pattern=r"^\+[1-9]\d{1,14}$",
+    )
+
+
+class WarmTransferCallOutput(BaseModel):
+    """Status payload returned after invoking the SBC transfer control API."""
+
+    status: str = Field(
+        description="Transfer submission status: 'started' when accepted, else 'failed'."
+    )
+    session_id: str | None = Field(
+        default=None,
+        description="Active call session identifier used for transfer routing.",
+    )
+    transfer_to_phone_number: str = Field(
+        description="Validated E.164 number that the transfer attempted to dial."
+    )
+    message: str = Field(
+        description="Human-readable outcome message for transcript logging."
+    )
+
+
 # ---------------------------------------------------------------------------
 # Tool implementation
 # ---------------------------------------------------------------------------
@@ -280,6 +311,99 @@ def prepare_meeting_context(
         ).strip()
         or fallback["recommended_next_question"],
         limitations=_MEETING_PREP_LIMITATIONS,
+    )
+
+
+@tool_decorator(
+    ToolCategory.MUTATIVE,
+    description=(
+        "Start a warm transfer by instructing the internal Rust SBC gateway to "
+        "dial a destination phone number over the configured Twilio SIP trunk."
+    ),
+    prompt_instructions=(
+        "Call warm_transfer_call when the caller explicitly asks to be transferred "
+        "to a person. Pass only a strict E.164 number (starts with + and country "
+        "code). Confirm the number with the caller before calling this tool."
+    ),
+    input_model=WarmTransferCallInput,
+    output_model=WarmTransferCallOutput,
+)
+def warm_transfer_call(
+    input: WarmTransferCallInput,  # noqa: A002
+    tool_config: dict[str, Any],
+) -> WarmTransferCallOutput:
+    """Trigger a warm transfer via the Rust SBC control API."""
+    transfer_cfg = _load_warm_transfer_config(tool_config)
+    session_id = transfer_cfg["session_id"]
+    if not session_id:
+        return WarmTransferCallOutput(
+            status="failed",
+            session_id=None,
+            transfer_to_phone_number=input.transfer_to_phone_number,
+            message=(
+                "Warm transfer is not available because no active call session id "
+                "was found in runtime context."
+            ),
+        )
+
+    missing = [
+        key
+        for key in ("gateway_base_url", "trunk_host", "twilio_number")
+        if not transfer_cfg[key]
+    ]
+    if missing:
+        return WarmTransferCallOutput(
+            status="failed",
+            session_id=session_id,
+            transfer_to_phone_number=input.transfer_to_phone_number,
+            message=(
+                "Warm transfer tool is missing required configuration keys: "
+                + ", ".join(missing)
+            ),
+        )
+
+    payload = {
+        "session_id": session_id,
+        "target_phone": input.transfer_to_phone_number,
+        "twilio_number": transfer_cfg["twilio_number"],
+        "trunk_host": transfer_cfg["trunk_host"],
+        "trunk_port": transfer_cfg["trunk_port"],
+    }
+
+    if transfer_cfg["rtp_target_host"] and transfer_cfg["rtp_target_port"]:
+        payload["rtp_target_host"] = transfer_cfg["rtp_target_host"]
+        payload["rtp_target_port"] = transfer_cfg["rtp_target_port"]
+
+    transfer_url = (
+        f"{str(transfer_cfg['gateway_base_url']).rstrip('/')}"
+        "/api/internal/transfer/start"
+    )
+    timeout_seconds = float(transfer_cfg["timeout_seconds"])
+
+    try:
+        response = httpx.post(transfer_url, json=payload, timeout=timeout_seconds)
+        response.raise_for_status()
+    except Exception as exc:
+        logger.exception(
+            "warm_transfer_call failed: session_id=%s target=%s",
+            session_id,
+            input.transfer_to_phone_number,
+        )
+        return WarmTransferCallOutput(
+            status="failed",
+            session_id=session_id,
+            transfer_to_phone_number=input.transfer_to_phone_number,
+            message=f"Warm transfer request failed: {exc}",
+        )
+
+    return WarmTransferCallOutput(
+        status="started",
+        session_id=session_id,
+        transfer_to_phone_number=input.transfer_to_phone_number,
+        message=(
+            "Warm transfer request accepted by SBC gateway; outbound dialing has "
+            "started."
+        ),
     )
 
 
@@ -499,3 +623,74 @@ def _select_outcome(
     ):
         return "paid_internship"
     return "job_shadowing"
+
+
+def _load_warm_transfer_config(tool_config: dict[str, Any]) -> dict[str, Any]:
+    """Load warm-transfer settings from persona config plus runtime context."""
+    warm_transfer_cfg = tool_config.get("warm_transfer")
+    if not isinstance(warm_transfer_cfg, dict):
+        warm_transfer_cfg = {}
+
+    runtime = tool_config.get("_runtime")
+    if not isinstance(runtime, dict):
+        runtime = {}
+
+    return {
+        "gateway_base_url": str(
+            warm_transfer_cfg.get(
+                "gateway_base_url",
+                tool_config.get("gateway_base_url", ""),
+            )
+        ).strip(),
+        "trunk_host": str(
+            warm_transfer_cfg.get("trunk_host", tool_config.get("trunk_host", ""))
+        ).strip(),
+        "twilio_number": str(
+            warm_transfer_cfg.get(
+                "twilio_number",
+                tool_config.get("twilio_number", ""),
+            )
+        ).strip(),
+        "trunk_port": _coerce_int(
+            warm_transfer_cfg.get("trunk_port", tool_config.get("trunk_port", 5060)),
+            fallback=5060,
+        ),
+        "timeout_seconds": _coerce_float(
+            warm_transfer_cfg.get(
+                "timeout_seconds",
+                tool_config.get("timeout_seconds", 5.0),
+            ),
+            fallback=5.0,
+        ),
+        "rtp_target_host": str(
+            warm_transfer_cfg.get(
+                "rtp_target_host",
+                tool_config.get("rtp_target_host", ""),
+            )
+        ).strip(),
+        "rtp_target_port": warm_transfer_cfg.get(
+            "rtp_target_port",
+            tool_config.get("rtp_target_port"),
+        ),
+        "session_id": str(
+            runtime.get("session_id")
+            or warm_transfer_cfg.get("session_id")
+            or tool_config.get("session_id", "")
+        ).strip(),
+    }
+
+
+def _coerce_int(value: Any, *, fallback: int) -> int:
+    """Parse int-like values from JSON tool config with a safe fallback."""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _coerce_float(value: Any, *, fallback: float) -> float:
+    """Parse float-like values from JSON tool config with a safe fallback."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return fallback

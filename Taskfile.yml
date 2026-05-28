@@ -26,6 +26,8 @@ tasks:
     cmds:
       - task text-tools:lint
       - task text-tools:test
+      - task rust-sbc-gateway:lint
+      - task rust-sbc-gateway:test
       - bash -lc 'poetry run mypy {{.SRC_DIR}} && PYTHONPYCACHEPREFIX=/tmp/backend-api-pyc poetry run python -m compileall {{.SRC_DIR}} && poetry run black --workers 1 --check --diff {{.SRC_DIR}} && poetry run pydocstyle {{.SRC_DIR}} && poetry run python -m pytest && PYTHONPYCACHEPREFIX=/tmp/backend-api-pyc poetry run python -m compileall app alembic'
 
   test:
@@ -42,21 +44,21 @@ tasks:
 
   service:lint:
     desc: >-
-      Run lint/checks for SERVICE=backend-api, text-tools, or all.
+      Run lint/checks for SERVICE=backend-api, text-tools, rust-sbc-gateway, or all.
     cmds:
-      - 'SERVICE="{{.SERVICE}}" bash -lc ''case "${SERVICE}" in backend-api) task lint ;; text-tools) task text-tools:lint ;; all) task text-tools:lint && task lint ;; *) echo "Unknown SERVICE: ${SERVICE}. Use backend-api, text-tools, or all." && exit 1 ;; esac'''
+      - 'SERVICE="{{.SERVICE}}" bash -lc ''case "${SERVICE}" in backend-api) task lint ;; text-tools) task text-tools:lint ;; rust-sbc-gateway) task rust-sbc-gateway:lint ;; all) task text-tools:lint && task rust-sbc-gateway:lint && task lint ;; *) echo "Unknown SERVICE: ${SERVICE}. Use backend-api, text-tools, rust-sbc-gateway, or all." && exit 1 ;; esac'''
 
   service:test:
     desc: >-
-      Run tests for SERVICE=backend-api, text-tools, or all.
+      Run tests for SERVICE=backend-api, text-tools, rust-sbc-gateway, or all.
     cmds:
-      - 'SERVICE="{{.SERVICE}}" bash -lc ''case "${SERVICE}" in backend-api) task test ;; text-tools) task text-tools:test ;; all) task text-tools:test && task test ;; *) echo "Unknown SERVICE: ${SERVICE}. Use backend-api, text-tools, or all." && exit 1 ;; esac'''
+      - 'SERVICE="{{.SERVICE}}" bash -lc ''case "${SERVICE}" in backend-api) task test ;; text-tools) task text-tools:test ;; rust-sbc-gateway) task rust-sbc-gateway:test ;; all) task text-tools:test && task rust-sbc-gateway:test && task test ;; *) echo "Unknown SERVICE: ${SERVICE}. Use backend-api, text-tools, rust-sbc-gateway, or all." && exit 1 ;; esac'''
 
   service:build:
     desc: >-
-      Build/check SERVICE=backend-api, text-tools, or all.
+      Build/check SERVICE=backend-api, text-tools, rust-sbc-gateway, or all.
     cmds:
-      - 'SERVICE="{{.SERVICE}}" bash -lc ''case "${SERVICE}" in backend-api) task build ;; text-tools) task text-tools:build ;; all) task text-tools:build && task build ;; *) echo "Unknown SERVICE: ${SERVICE}. Use backend-api, text-tools, or all." && exit 1 ;; esac'''
+      - 'SERVICE="{{.SERVICE}}" bash -lc ''case "${SERVICE}" in backend-api) task build ;; text-tools) task text-tools:build ;; rust-sbc-gateway) task rust-sbc-gateway:build ;; all) task text-tools:build && task rust-sbc-gateway:build && task build ;; *) echo "Unknown SERVICE: ${SERVICE}. Use backend-api, text-tools, rust-sbc-gateway, or all." && exit 1 ;; esac'''
 
   text-tools:run:
     desc: >-
@@ -91,6 +93,42 @@ tasks:
     desc: >-
       Build the Rust text tools sidecar.
     dir: text-tools
+    cmds:
+      - cargo build
+
+  rust-sbc-gateway:run:
+    desc: >-
+      Run the Rust SBC gateway service.
+    dir: rust-sbc-gateway
+    cmds:
+      - SBC_CONTROL_BIND="${SBC_CONTROL_BIND:-127.0.0.1:8082}" SBC_WS_BIND="${SBC_WS_BIND:-127.0.0.1:8083}" SBC_SIP_BIND="${SBC_SIP_BIND:-0.0.0.0:5060}" SBC_RTP_START_PORT="${SBC_RTP_START_PORT:-10000}" SBC_RTP_END_PORT="${SBC_RTP_END_PORT:-10100}" RUST_LOG="${RUST_LOG:-info}" cargo run
+
+  rust-sbc-gateway:fmt:
+    desc: >-
+      Format the Rust SBC gateway service.
+    dir: rust-sbc-gateway
+    cmds:
+      - cargo fmt
+
+  rust-sbc-gateway:lint:
+    desc: >-
+      Check formatting and clippy for the Rust SBC gateway service.
+    dir: rust-sbc-gateway
+    cmds:
+      - cargo fmt --check
+      - cargo clippy --all-targets -- -D warnings
+
+  rust-sbc-gateway:test:
+    desc: >-
+      Run tests for the Rust SBC gateway service.
+    dir: rust-sbc-gateway
+    cmds:
+      - cargo test
+
+  rust-sbc-gateway:build:
+    desc: >-
+      Build the Rust SBC gateway service.
+    dir: rust-sbc-gateway
     cmds:
       - cargo build
 
@@ -138,11 +176,11 @@ tasks:
 
   docker-build:
     cmds:
-      - SERVICE="{{.SERVICE}}" IMAGE_REPOSITORY="${IMAGE_REPOSITORY:-backend-api}" TEXT_TOOLS_IMAGE_REPOSITORY="${TEXT_TOOLS_IMAGE_REPOSITORY:-demo-text-tools}" IMAGE_TAG="${IMAGE_TAG:-}" bash ./deploy/scripts/build-image.sh
+      - SERVICE="{{.SERVICE}}" IMAGE_REPOSITORY="${IMAGE_REPOSITORY:-backend-api}" TEXT_TOOLS_IMAGE_REPOSITORY="${TEXT_TOOLS_IMAGE_REPOSITORY:-demo-text-tools}" RUST_SBC_IMAGE_REPOSITORY="${RUST_SBC_IMAGE_REPOSITORY:-demo-rust-sbc-gateway}" IMAGE_TAG="${IMAGE_TAG:-}" bash ./deploy/scripts/build-image.sh
 
   save-image:
     cmds:
-      - SERVICE="{{.SERVICE}}" IMAGE_REPOSITORY="${IMAGE_REPOSITORY:-backend-api}" TEXT_TOOLS_IMAGE_REPOSITORY="${TEXT_TOOLS_IMAGE_REPOSITORY:-demo-text-tools}" IMAGE_TAG="${IMAGE_TAG:-}" bash ./deploy/scripts/save-image.sh
+      - SERVICE="{{.SERVICE}}" IMAGE_REPOSITORY="${IMAGE_REPOSITORY:-backend-api}" TEXT_TOOLS_IMAGE_REPOSITORY="${TEXT_TOOLS_IMAGE_REPOSITORY:-demo-text-tools}" RUST_SBC_IMAGE_REPOSITORY="${RUST_SBC_IMAGE_REPOSITORY:-demo-rust-sbc-gateway}" IMAGE_TAG="${IMAGE_TAG:-}" bash ./deploy/scripts/save-image.sh
 
   apply-runtime-secret:
     cmds:
@@ -151,15 +189,27 @@ tasks:
 
   copy-bundle:
     cmds:
-      - SERVICE="{{.SERVICE}}" IMAGE_REPOSITORY="${IMAGE_REPOSITORY:-backend-api}" TEXT_TOOLS_IMAGE_REPOSITORY="${TEXT_TOOLS_IMAGE_REPOSITORY:-demo-text-tools}" IMAGE_TAG="${IMAGE_TAG:-}" DEPLOY_TARGET="${DEPLOY_TARGET:-ubuntu@openclaw}" DEPLOY_PATH="${DEPLOY_PATH:-/home/ubuntu/backend-api-deploy}" SSH_OPTS="${SSH_OPTS:-}" bash ./deploy/scripts/copy-deploy-bundle.sh
+      - SERVICE="{{.SERVICE}}" IMAGE_REPOSITORY="${IMAGE_REPOSITORY:-backend-api}" TEXT_TOOLS_IMAGE_REPOSITORY="${TEXT_TOOLS_IMAGE_REPOSITORY:-demo-text-tools}" RUST_SBC_IMAGE_REPOSITORY="${RUST_SBC_IMAGE_REPOSITORY:-demo-rust-sbc-gateway}" IMAGE_TAG="${IMAGE_TAG:-}" DEPLOY_TARGET="${DEPLOY_TARGET:-ubuntu@openclaw}" DEPLOY_PATH="${DEPLOY_PATH:-/home/ubuntu/backend-api-deploy}" SSH_OPTS="${SSH_OPTS:-}" bash ./deploy/scripts/copy-deploy-bundle.sh
 
   deploy:
     cmds:
-      - SERVICE="{{.SERVICE}}" RELEASE_NAME="${RELEASE_NAME:-backend-api}" TEXT_TOOLS_RELEASE_NAME="${TEXT_TOOLS_RELEASE_NAME:-demo-text-tools}" NAMESPACE="${NAMESPACE:-demo}" VALUES_FILE="${VALUES_FILE:-deploy/helm/backend-api/values-demo.yaml}" TEXT_TOOLS_VALUES_FILE="${TEXT_TOOLS_VALUES_FILE:-deploy/helm/text-tools/values-demo.yaml}" IMAGE_REPOSITORY="${IMAGE_REPOSITORY:-backend-api}" TEXT_TOOLS_IMAGE_REPOSITORY="${TEXT_TOOLS_IMAGE_REPOSITORY:-demo-text-tools}" IMAGE_TAG="${IMAGE_TAG:-}" bash ./deploy/scripts/deploy.sh
+      - SERVICE="{{.SERVICE}}" RELEASE_NAME="${RELEASE_NAME:-backend-api}" TEXT_TOOLS_RELEASE_NAME="${TEXT_TOOLS_RELEASE_NAME:-demo-text-tools}" RUST_SBC_RELEASE_NAME="${RUST_SBC_RELEASE_NAME:-demo-rust-sbc-gateway}" NAMESPACE="${NAMESPACE:-demo}" VALUES_FILE="${VALUES_FILE:-deploy/helm/backend-api/values-demo.yaml}" TEXT_TOOLS_VALUES_FILE="${TEXT_TOOLS_VALUES_FILE:-deploy/helm/text-tools/values-demo.yaml}" RUST_SBC_VALUES_FILE="${RUST_SBC_VALUES_FILE:-deploy/helm/rust-sbc-gateway/values-demo.yaml}" IMAGE_REPOSITORY="${IMAGE_REPOSITORY:-backend-api}" TEXT_TOOLS_IMAGE_REPOSITORY="${TEXT_TOOLS_IMAGE_REPOSITORY:-demo-text-tools}" RUST_SBC_IMAGE_REPOSITORY="${RUST_SBC_IMAGE_REPOSITORY:-demo-rust-sbc-gateway}" IMAGE_TAG="${IMAGE_TAG:-}" bash ./deploy/scripts/deploy.sh
+
+  rust-sbc-gateway:deploy:
+    desc: >-
+      Deploy only the Rust SBC gateway service.
+    cmds:
+      - SERVICE="rust-sbc-gateway" RUST_SBC_RELEASE_NAME="${RUST_SBC_RELEASE_NAME:-demo-rust-sbc-gateway}" NAMESPACE="${NAMESPACE:-demo}" RUST_SBC_VALUES_FILE="${RUST_SBC_VALUES_FILE:-deploy/helm/rust-sbc-gateway/values-demo.yaml}" RUST_SBC_IMAGE_REPOSITORY="${RUST_SBC_IMAGE_REPOSITORY:-demo-rust-sbc-gateway}" IMAGE_TAG="${IMAGE_TAG:-}" bash ./deploy/scripts/deploy.sh
 
   ship-deploy:
     cmds:
-      - SERVICE="{{.SERVICE}}" RELEASE_NAME="${RELEASE_NAME:-backend-api}" TEXT_TOOLS_RELEASE_NAME="${TEXT_TOOLS_RELEASE_NAME:-demo-text-tools}" NAMESPACE="${NAMESPACE:-demo}" VALUES_FILE="${VALUES_FILE:-deploy/helm/backend-api/values-demo.yaml}" TEXT_TOOLS_VALUES_FILE="${TEXT_TOOLS_VALUES_FILE:-deploy/helm/text-tools/values-demo.yaml}" IMAGE_REPOSITORY="${IMAGE_REPOSITORY:-backend-api}" TEXT_TOOLS_IMAGE_REPOSITORY="${TEXT_TOOLS_IMAGE_REPOSITORY:-demo-text-tools}" DEPLOY_TARGET="${DEPLOY_TARGET:-ubuntu@openclaw}" DEPLOY_PATH="${DEPLOY_PATH:-/home/ubuntu/backend-api-deploy}" SSH_OPTS="${SSH_OPTS:-}" KEEP_REMOTE_RELEASES="${KEEP_REMOTE_RELEASES:-3}" bash ./deploy/scripts/ship-deploy.sh
+      - SERVICE="{{.SERVICE}}" RELEASE_NAME="${RELEASE_NAME:-backend-api}" TEXT_TOOLS_RELEASE_NAME="${TEXT_TOOLS_RELEASE_NAME:-demo-text-tools}" RUST_SBC_RELEASE_NAME="${RUST_SBC_RELEASE_NAME:-demo-rust-sbc-gateway}" NAMESPACE="${NAMESPACE:-demo}" VALUES_FILE="${VALUES_FILE:-deploy/helm/backend-api/values-demo.yaml}" TEXT_TOOLS_VALUES_FILE="${TEXT_TOOLS_VALUES_FILE:-deploy/helm/text-tools/values-demo.yaml}" RUST_SBC_VALUES_FILE="${RUST_SBC_VALUES_FILE:-deploy/helm/rust-sbc-gateway/values-demo.yaml}" IMAGE_REPOSITORY="${IMAGE_REPOSITORY:-backend-api}" TEXT_TOOLS_IMAGE_REPOSITORY="${TEXT_TOOLS_IMAGE_REPOSITORY:-demo-text-tools}" RUST_SBC_IMAGE_REPOSITORY="${RUST_SBC_IMAGE_REPOSITORY:-demo-rust-sbc-gateway}" DEPLOY_TARGET="${DEPLOY_TARGET:-ubuntu@openclaw}" DEPLOY_PATH="${DEPLOY_PATH:-/home/ubuntu/backend-api-deploy}" SSH_OPTS="${SSH_OPTS:-}" KEEP_REMOTE_RELEASES="${KEEP_REMOTE_RELEASES:-3}" bash ./deploy/scripts/ship-deploy.sh
+
+  rust-sbc-gateway:ship-deploy:
+    desc: >-
+      Build, ship, and deploy only the Rust SBC gateway service.
+    cmds:
+      - SERVICE="rust-sbc-gateway" RUST_SBC_RELEASE_NAME="${RUST_SBC_RELEASE_NAME:-demo-rust-sbc-gateway}" NAMESPACE="${NAMESPACE:-demo}" RUST_SBC_VALUES_FILE="${RUST_SBC_VALUES_FILE:-deploy/helm/rust-sbc-gateway/values-demo.yaml}" RUST_SBC_IMAGE_REPOSITORY="${RUST_SBC_IMAGE_REPOSITORY:-demo-rust-sbc-gateway}" DEPLOY_TARGET="${DEPLOY_TARGET:-ubuntu@openclaw}" DEPLOY_PATH="${DEPLOY_PATH:-/home/ubuntu/backend-api-deploy}" SSH_OPTS="${SSH_OPTS:-}" KEEP_REMOTE_RELEASES="${KEEP_REMOTE_RELEASES:-3}" bash ./deploy/scripts/ship-deploy.sh
 
   rollback:
     cmds:
