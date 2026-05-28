@@ -115,20 +115,8 @@ async fn main() -> anyhow::Result<()> {
         sip_engine_tx,
     };
 
-    let control_app = Router::new()
-        .route("/health", get(health))
-        .route("/metrics", get(metrics_handler))
-        .route("/api/internal/sessions", post(create_session))
-        .route(
-            "/api/internal/sessions/:session_id/state",
-            patch(update_state),
-        )
-        .route("/api/internal/transfer/start", post(start_transfer))
-        .with_state(state.clone());
-
-    let ws_app = Router::new()
-        .route("/api/voice/stream", get(ws_stream))
-        .with_state(state.clone());
+    let control_app = build_control_router(state.clone());
+    let ws_app = build_ws_router(state.clone());
 
     let control_listener = TcpListener::bind(state.config.control_bind)
         .await
@@ -152,6 +140,25 @@ async fn main() -> anyhow::Result<()> {
     tokio::try_join!(control_server, ws_server)?;
 
     Ok(())
+}
+
+fn build_control_router(state: AppState) -> Router {
+    Router::new()
+        .route("/health", get(health))
+        .route("/metrics", get(metrics_handler))
+        .route("/api/internal/sessions", post(create_session))
+        .route(
+            "/api/internal/sessions/{session_id}/state",
+            patch(update_state),
+        )
+        .route("/api/internal/transfer/start", post(start_transfer))
+        .with_state(state)
+}
+
+fn build_ws_router(state: AppState) -> Router {
+    Router::new()
+        .route("/api/voice/stream", get(ws_stream))
+        .with_state(state)
 }
 
 async fn health() -> &'static str {
@@ -371,4 +378,37 @@ fn spawn_rtp_sender(
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+
+    use super::*;
+
+    fn test_state() -> AppState {
+        let (sip_engine_tx, _sip_engine_rx) = mpsc::channel(1);
+        AppState {
+            config: AppConfig {
+                control_bind: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8082),
+                ws_bind: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8083),
+                sip_bind: SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 5060),
+                local_sip_advertise_host: "127.0.0.1".to_string(),
+                rtp_start_port: 10000,
+                rtp_end_port: 10100,
+                default_trunk_port: 5060,
+            },
+            sessions: SessionRegistry::new(),
+            metrics: Metrics::shared(),
+            sip_engine_tx,
+            rtp_ports: Arc::new(Mutex::new(RtpPortPool::new(10000, 10100))),
+        }
+    }
+
+    #[test]
+    fn routers_build_without_panicking() {
+        let state = test_state();
+        let _control = build_control_router(state.clone());
+        let _ws = build_ws_router(state);
+    }
 }
