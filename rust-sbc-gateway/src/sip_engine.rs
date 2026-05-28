@@ -6,7 +6,10 @@ use tokio::sync::mpsc;
 use tracing::{error, info, warn};
 
 use crate::metrics::Metrics;
-use crate::sip::{build_sip_invite, extract_audio_port_from_sdp, is_sip_200_ok, SipInviteRequest};
+use crate::sip::{
+    build_sip_invite, extract_audio_port_from_sdp, is_sip_200_ok, parse_sip_status_line,
+    SipInviteRequest,
+};
 
 #[derive(Debug)]
 pub enum SipEngineCommand {
@@ -66,10 +69,25 @@ pub fn spawn_sip_engine(
                         Ok((size, source_addr)) => {
                             metrics.sip_responses_total.fetch_add(1, Ordering::Relaxed);
                             let text = String::from_utf8_lossy(&buf[..size]);
+                            let status_line = parse_sip_status_line(&text)
+                                .unwrap_or_else(|| "<unknown SIP response>".to_string());
                             if is_sip_200_ok(&text) {
                                 metrics.sip_200_ok_total.fetch_add(1, Ordering::Relaxed);
                                 let remote_port = extract_audio_port_from_sdp(&text);
-                                info!(%source_addr, ?remote_port, "received SIP 200 OK");
+                                info!(
+                                    %source_addr,
+                                    %status_line,
+                                    ?remote_port,
+                                    "received SIP response"
+                                );
+                            } else {
+                                let payload_preview: String = text.chars().take(300).collect();
+                                warn!(
+                                    %source_addr,
+                                    %status_line,
+                                    payload_preview=%payload_preview,
+                                    "received non-200 SIP response"
+                                );
                             }
                         }
                         Err(err) => {

@@ -72,11 +72,13 @@ pub fn build_sip_invite(request: &SipInviteRequest) -> anyhow::Result<SipInvite>
 }
 
 pub fn is_sip_200_ok(message: &str) -> bool {
-    message
-        .lines()
-        .next()
-        .map(|line| line.trim().starts_with("SIP/2.0 200"))
+    parse_sip_status_line(message)
+        .map(|status| status.starts_with("SIP/2.0 200"))
         .unwrap_or(false)
+}
+
+pub fn parse_sip_status_line(message: &str) -> Option<String> {
+    message.lines().next().map(|line| line.trim().to_string())
 }
 
 pub fn extract_audio_port_from_sdp(message: &str) -> Option<u16> {
@@ -95,7 +97,10 @@ pub fn extract_audio_port_from_sdp(message: &str) -> Option<u16> {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_sip_invite, extract_audio_port_from_sdp, is_sip_200_ok, SipInviteRequest};
+    use super::{
+        build_sip_invite, extract_audio_port_from_sdp, is_sip_200_ok, parse_sip_status_line,
+        SipInviteRequest,
+    };
 
     #[test]
     fn invite_has_required_sections_and_correct_content_length() {
@@ -141,6 +146,10 @@ mod tests {
         let response =
             "SIP/2.0 200 OK\r\nVia: SIP/2.0/UDP example\r\n\r\nv=0\r\nm=audio 18452 RTP/AVP 0\r\n";
         assert!(is_sip_200_ok(response));
+        assert_eq!(
+            parse_sip_status_line(response),
+            Some("SIP/2.0 200 OK".to_string())
+        );
         assert_eq!(extract_audio_port_from_sdp(response), Some(18452));
     }
 }
