@@ -35,8 +35,11 @@ pub struct InboundBridgeHandle {
 
 impl InboundBridgeHandle {
     pub async fn stop(self) {
-        let _ = self.ws_out_tx.send(WsOutboundMessage::StopAndClose).await;
+        let _ = self.ws_out_tx.try_send(WsOutboundMessage::StopAndClose);
+        tokio::task::yield_now().await;
+
         for task in self.tasks {
+            task.abort();
             let _ = task.await;
         }
     }
@@ -301,4 +304,36 @@ pub async fn start_inbound_bridge(
         tasks: vec![ws_writer, rtp_to_ws, rtp_playout, ws_to_rtp],
         ws_out_tx,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::future::pending;
+    use std::net::SocketAddr;
+    use std::time::Duration;
+
+    use tokio::sync::mpsc;
+
+    use super::{InboundBridgeHandle, WsOutboundMessage};
+
+    #[tokio::test]
+    async fn stop_returns_when_bridge_task_is_waiting_forever() {
+        let (ws_out_tx, _ws_out_rx) = mpsc::channel::<WsOutboundMessage>(1);
+        let blocked_task = tokio::spawn(async {
+            pending::<()>().await;
+        });
+        let handle = InboundBridgeHandle {
+            call_id: "call-1".to_string(),
+            call_sid: "CA1".to_string(),
+            local_rtp_port: 10000,
+            local_tag: "tag-1".to_string(),
+            remote_media_addr: SocketAddr::from(([127, 0, 0, 1], 12000)),
+            tasks: vec![blocked_task],
+            ws_out_tx,
+        };
+
+        tokio::time::timeout(Duration::from_millis(100), handle.stop())
+            .await
+            .expect("bridge stop should not wait forever on blocked tasks");
+    }
 }
