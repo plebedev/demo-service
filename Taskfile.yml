@@ -34,6 +34,12 @@ tasks:
     cmds:
       - poetry run python -m pytest
 
+  test:local-postgres:
+    desc: >-
+      Run tests against a dedicated database in the local Compose PostgreSQL.
+    cmds:
+      - bash ./local/scripts/test-postgres.sh {{.CLI_ARGS}}
+
   dev:
     cmds:
       - poetry run uvicorn app.main:create_app --factory --reload --host 0.0.0.0 --port 8000

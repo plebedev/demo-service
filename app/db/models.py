@@ -30,7 +30,11 @@ from app.models.rag import (
 from app.models.run import Run
 from app.models.run_event import RunEvent
 from app.models.sms import SmsConversation, SmsMessage, SmsOptOut
-from app.models.voice import VoiceExperienceConfig, VoicePersona
+from app.models.voice import (
+    VoiceConversationRecord,
+    VoiceExperienceConfig,
+    VoicePersona,
+)
 
 __all__ = [
     "ExampleRecord",
@@ -59,6 +63,7 @@ __all__ = [
     "SmsConversation",
     "SmsMessage",
     "SmsOptOut",
+    "VoiceConversationRecord",
     "VoiceExperienceConfig",
     "VoicePersona",
 ]

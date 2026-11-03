@@ -970,10 +970,35 @@ loads that file itself in local mode.
 
 ## Tests
 
-Run the normal backend checks with:
+By default, tests start a disposable PostgreSQL instance with Testcontainers:
 
 ```bash
 task test
+```
+
+To reuse the PostgreSQL service from `local/docker-compose.yaml`, run:
+
+```bash
+task test:local-postgres
+```
+
+That command starts only the Compose `postgres` service on test port `55432`,
+creates a separate `demo_service_test` database when needed, applies Alembic
+migrations, and runs the same test suite. It does not use the local development
+database because the suite truncates mutable tables between tests. Override the
+port with `TEST_POSTGRES_PORT` if needed.
+
+Tests can also use any existing PostgreSQL server by setting a SQLAlchemy URL
+explicitly. The database name must contain `test` as a safety guard:
+
+```bash
+TEST_DATABASE_URL='postgresql+psycopg://user:password@127.0.0.1:5432/demo_service_test' task test
+```
+
+When `TEST_DATABASE_URL` is unset, Testcontainers remains the fallback. Run
+the remaining backend checks with:
+
+```bash
 task lint
 task build
 task verify

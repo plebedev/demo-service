@@ -11,11 +11,13 @@ from alembic.config import Config
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
+from sqlalchemy.engine.url import make_url
 from sqlalchemy.orm import Session, sessionmaker
 from testcontainers.postgres import PostgresContainer
 
 import app.db.models  # noqa: F401
 from app.core.config import get_settings
+from app.db.base import Base
 from app.db.session import get_engine, get_session_factory
 from app.main import create_app
 
@@ -25,6 +27,26 @@ def _sqlalchemy_database_url(container: PostgresContainer) -> str:
     return container.get_connection_url().replace(
         "postgresql+psycopg2://", "postgresql+psycopg://"
     )
+
+
+def _configured_test_database_url() -> str | None:
+    """Return and validate the explicitly configured local test database URL."""
+    configured_url = os.environ.get("TEST_DATABASE_URL")
+    if not configured_url:
+        return None
+
+    url = make_url(configured_url)
+    database_name = url.database or ""
+    if "test" not in database_name.lower():
+        raise RuntimeError(
+            "TEST_DATABASE_URL must select a dedicated database whose name "
+            "contains 'test'; the test suite truncates mutable tables."
+        )
+    if url.get_backend_name() != "postgresql":
+        raise RuntimeError("TEST_DATABASE_URL must use PostgreSQL.")
+    if url.drivername in {"postgres", "postgresql", "postgresql+psycopg2"}:
+        url = url.set(drivername="postgresql+psycopg")
+    return url.render_as_string(hide_password=False)
 
 
 @pytest.fixture(scope="session")
@@ -44,9 +66,12 @@ def postgres_container() -> Iterator[PostgresContainer]:
 
 
 @pytest.fixture(scope="session")
-def database_url(postgres_container: PostgresContainer) -> Iterator[str]:
-    """Configure the app to use the ephemeral Postgres instance."""
-    url = _sqlalchemy_database_url(postgres_container)
+def database_url(request: pytest.FixtureRequest) -> Iterator[str]:
+    """Configure the app to use local Postgres or a disposable container."""
+    url = _configured_test_database_url()
+    if url is None:
+        postgres_container = request.getfixturevalue("postgres_container")
+        url = _sqlalchemy_database_url(postgres_container)
 
     previous_environment = {
         "DATABASE_URL": os.environ.get("DATABASE_URL"),
@@ -90,7 +115,7 @@ def database_url(postgres_container: PostgresContainer) -> Iterator[str]:
 
 @pytest.fixture(scope="session")
 def engine(database_url: str) -> Iterator[Engine]:
-    """Create a SQLAlchemy engine bound to the test Postgres container."""
+    """Create a SQLAlchemy engine bound to the selected test database."""
     db_engine = create_engine(database_url, pool_pre_ping=True)
 
     yield db_engine
@@ -111,42 +136,11 @@ def reset_database(
     """Truncate mutable tables between tests while preserving migrated schema."""
     session = session_factory()
     try:
-        session.execute(
-            text(
-                """
-                TRUNCATE TABLE
-                    context_source_links,
-                    context_perspective_views,
-                    context_actionable_items,
-                    context_signals,
-                    context_relationships,
-                    context_entities,
-                    context_artifact_chunks,
-                    context_artifacts,
-                    rag_document_chunks,
-                    rag_message_citations,
-                    rag_messages,
-                    rag_conversations,
-                    rag_persona_documents,
-                    rag_document_labels,
-                    rag_personas,
-                    rag_labels,
-                    rag_documents,
-                    sms_messages,
-                    sms_conversations,
-                    sms_opt_outs,
-                    run_events,
-                    runs,
-                    invitation_requests,
-                    invitation_redemptions,
-                    invitation_codes,
-                    voice_personas,
-                    voice_experience_configs,
-                    example_records
-                RESTART IDENTITY CASCADE
-                """
-            )
+        preparer = session.get_bind().dialect.identifier_preparer
+        table_names = ", ".join(
+            preparer.format_table(table) for table in Base.metadata.sorted_tables
         )
+        session.execute(text(f"TRUNCATE TABLE {table_names} RESTART IDENTITY CASCADE"))
         session.commit()
         yield
     finally:
