@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import threading
 from collections import defaultdict
-from typing import Protocol
+from typing import Any, Protocol
 
+from app.core.context_engine.errors import IdempotencyKeyExistsError
 from app.core.context_engine.models import (
     ActionableItem,
     Artifact,
@@ -12,69 +14,37 @@ from app.core.context_engine.models import (
     ContextEntity,
     ContextRelationship,
     ContextSignal,
+    IngestionBatch,
+    IngestionResult,
     OwnerType,
     PerspectiveView,
-    SourceLink,
 )
-
-
-def _artifact_for_required_source_link(
-    artifacts: dict[str, Artifact],
-    source_links: list[SourceLink],
-    record_type: str,
-    record_id: str,
-) -> Artifact:
-    """Return the artifact for a required source link or raise clearly."""
-    if not source_links:
-        raise ValueError(f"{record_type} '{record_id}' must include source links.")
-    artifact = artifacts.get(source_links[0].artifact_id)
-    if artifact is None:
-        raise ValueError(
-            f"{record_type} '{record_id}' references unknown artifact "
-            f"'{source_links[0].artifact_id}'."
-        )
-    return artifact
+from app.core.context_engine.validation import validate_ingestion_batch
 
 
 class ContextRepository(Protocol):
     """Repository contract for Context Engine persistence."""
 
-    def store_artifact(self, artifact: Artifact) -> Artifact:
-        """Persist one artifact."""
+    def store_ingestion_batch(self, batch: IngestionBatch) -> IngestionBatch:
+        """Atomically persist every record produced by one ingestion batch.
+
+        Implementations validate provenance before writing, persist artifacts,
+        chunks, derived records, source links, and the idempotency record (when
+        a key is present) all-or-nothing, and raise
+        ``IdempotencyKeyExistsError`` when the owner/domain-scoped key already
+        has a stored batch.
+        """
         ...
 
-    def store_chunks(self, chunks: list[ArtifactChunk]) -> list[ArtifactChunk]:
-        """Persist artifact chunks."""
-        ...
-
-    def store_entities(self, entities: list[ContextEntity]) -> list[ContextEntity]:
-        """Persist context entities."""
-        ...
-
-    def store_relationships(
-        self, relationships: list[ContextRelationship]
-    ) -> list[ContextRelationship]:
-        """Persist context relationships."""
-        ...
-
-    def store_signals(self, signals: list[ContextSignal]) -> list[ContextSignal]:
-        """Persist context signals."""
-        ...
-
-    def store_actionable_items(
-        self, items: list[ActionableItem]
-    ) -> list[ActionableItem]:
-        """Persist actionable items."""
-        ...
-
-    def index_artifact_outputs(
+    def get_ingestion_batch(
         self,
         *,
-        artifact: Artifact,
-        signals: list[ContextSignal],
-        actionable_items: list[ActionableItem],
-    ) -> None:
-        """Index or associate outputs with their source artifact owner."""
+        domain_id: str,
+        owner_type: OwnerType,
+        owner_id: str,
+        idempotency_key: str,
+    ) -> IngestionBatch | None:
+        """Return the stored batch for one owner/domain-scoped idempotency key."""
         ...
 
     def list_signals(
@@ -198,78 +168,120 @@ class InMemoryContextRepository:
         self._task_index: dict[tuple[str, OwnerType, str], list[str]] = defaultdict(
             list
         )
+        self.ingestion_batches: dict[
+            tuple[str, OwnerType, str, str], IngestionBatch
+        ] = {}
+        self._lock = threading.RLock()
 
-    def store_artifact(self, artifact: Artifact) -> Artifact:
-        """Store one artifact in memory."""
-        self.artifacts[artifact.id] = artifact
-        key = (artifact.domain_id, artifact.owner_type, artifact.owner_id)
-        self._artifact_index[key].append(artifact.id)
-        return artifact
+    def store_ingestion_batch(self, batch: IngestionBatch) -> IngestionBatch:
+        """Validate and store one ingestion batch all-or-nothing."""
+        validate_ingestion_batch(batch)
+        stored = batch.model_copy(deep=True)
+        with self._lock:
+            key = self._batch_key(stored)
+            if key is not None and key in self.ingestion_batches:
+                raise IdempotencyKeyExistsError(
+                    "An ingestion batch already exists for this idempotency key."
+                )
+            self._ensure_new_record_ids(stored)
+            for result in stored.results:
+                self._apply_result(result)
+            if key is not None:
+                self.ingestion_batches[key] = stored
+        return stored.model_copy(deep=True)
 
-    def store_chunks(self, chunks: list[ArtifactChunk]) -> list[ArtifactChunk]:
-        """Store chunks in memory."""
-        for chunk in chunks:
-            self.chunks[chunk.id] = chunk
-        return chunks
-
-    def store_entities(self, entities: list[ContextEntity]) -> list[ContextEntity]:
-        """Store entities in memory."""
-        for entity in entities:
-            artifact = _artifact_for_required_source_link(
-                self.artifacts, entity.source_links, "ContextEntity", entity.id
-            )
-            self.entities[entity.id] = entity
-            key = (artifact.domain_id, artifact.owner_type, artifact.owner_id)
-            self._entity_index[key].append(entity.id)
-        return entities
-
-    def store_relationships(
-        self, relationships: list[ContextRelationship]
-    ) -> list[ContextRelationship]:
-        """Store relationships in memory."""
-        for relationship in relationships:
-            artifact = _artifact_for_required_source_link(
-                self.artifacts,
-                relationship.source_links,
-                "ContextRelationship",
-                relationship.id,
-            )
-            self.relationships[relationship.id] = relationship
-            key = (artifact.domain_id, artifact.owner_type, artifact.owner_id)
-            self._relationship_index[key].append(relationship.id)
-        return relationships
-
-    def store_signals(self, signals: list[ContextSignal]) -> list[ContextSignal]:
-        """Store signals in memory."""
-        for signal in signals:
-            _artifact_for_required_source_link(
-                self.artifacts, signal.source_links, "ContextSignal", signal.id
-            )
-            self.signals[signal.id] = signal
-        return signals
-
-    def store_actionable_items(
-        self, items: list[ActionableItem]
-    ) -> list[ActionableItem]:
-        """Store actionable items in memory."""
-        for item in items:
-            _artifact_for_required_source_link(
-                self.artifacts, item.source_links, "ActionableItem", item.id
-            )
-            self.actionable_items[item.id] = item
-        return items
-
-    def index_artifact_outputs(
+    def get_ingestion_batch(
         self,
         *,
-        artifact: Artifact,
-        signals: list[ContextSignal],
-        actionable_items: list[ActionableItem],
-    ) -> None:
-        """Index owner-scoped outputs for simple lookup APIs."""
+        domain_id: str,
+        owner_type: OwnerType,
+        owner_id: str,
+        idempotency_key: str,
+    ) -> IngestionBatch | None:
+        """Return the stored batch for one owner/domain-scoped idempotency key."""
+        with self._lock:
+            batch = self.ingestion_batches.get(
+                (domain_id, owner_type, owner_id, idempotency_key)
+            )
+            return batch.model_copy(deep=True) if batch is not None else None
+
+    @staticmethod
+    def _batch_key(batch: IngestionBatch) -> tuple[str, OwnerType, str, str] | None:
+        if batch.idempotency_key is None:
+            return None
+        return (
+            batch.domain_id,
+            batch.owner_type,
+            batch.owner_id,
+            batch.idempotency_key,
+        )
+
+    def _ensure_new_record_ids(self, batch: IngestionBatch) -> None:
+        """Reject batches that would overwrite already-stored records."""
+        stores: list[tuple[str, dict[str, Any], list[str]]] = [
+            (
+                "Artifact",
+                self.artifacts,
+                [result.artifact.id for result in batch.results],
+            ),
+            (
+                "ArtifactChunk",
+                self.chunks,
+                [chunk.id for result in batch.results for chunk in result.chunks],
+            ),
+            (
+                "ContextEntity",
+                self.entities,
+                [entity.id for result in batch.results for entity in result.entities],
+            ),
+            (
+                "ContextRelationship",
+                self.relationships,
+                [rel.id for result in batch.results for rel in result.relationships],
+            ),
+            (
+                "ContextSignal",
+                self.signals,
+                [signal.id for result in batch.results for signal in result.signals],
+            ),
+            (
+                "ActionableItem",
+                self.actionable_items,
+                [
+                    item.id
+                    for result in batch.results
+                    for item in result.actionable_items
+                ],
+            ),
+        ]
+        for record_type, existing, record_ids in stores:
+            for record_id in record_ids:
+                if record_id in existing:
+                    raise ValueError(
+                        f"{record_type} id '{record_id}' conflicts with an existing "
+                        "Context Engine record."
+                    )
+
+    def _apply_result(self, result: IngestionResult) -> None:
+        """Store and index one validated ingestion result."""
+        artifact = result.artifact
         key = (artifact.domain_id, artifact.owner_type, artifact.owner_id)
-        self._signal_index[key].extend(signal.id for signal in signals)
-        self._task_index[key].extend(item.id for item in actionable_items)
+        self.artifacts[artifact.id] = artifact
+        self._artifact_index[key].append(artifact.id)
+        for chunk in result.chunks:
+            self.chunks[chunk.id] = chunk
+        for entity in result.entities:
+            self.entities[entity.id] = entity
+            self._entity_index[key].append(entity.id)
+        for relationship in result.relationships:
+            self.relationships[relationship.id] = relationship
+            self._relationship_index[key].append(relationship.id)
+        for signal in result.signals:
+            self.signals[signal.id] = signal
+            self._signal_index[key].append(signal.id)
+        for item in result.actionable_items:
+            self.actionable_items[item.id] = item
+            self._task_index[key].append(item.id)
 
     def list_signals(
         self,

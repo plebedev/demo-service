@@ -7,7 +7,10 @@ from sqlalchemy import select
 
 from app.models.context_engine import (
     ContextActionableItemRecord,
+    ContextArtifactChunkRecord,
     ContextArtifactRecord,
+    ContextEntityRecord,
+    ContextIngestionBatchRecord,
     ContextPerspectiveViewRecord,
     ContextSignalRecord,
     ContextSourceLinkRecord,
@@ -324,3 +327,319 @@ def test_context_artifact_api_rejects_invalid_domain_and_type(client) -> None:
         json={"artifact_type_id": "missing-type", "text": "content"},
     )
     assert missing_type.status_code == 400
+    assert missing_type.json()["detail"] == (
+        "Artifact type 'missing-type' is not registered for domain 'test-domain'."
+    )
+
+
+def batch_payload(*texts: str, artifact_type_id: str = "note") -> dict[str, object]:
+    """Return a batch ingestion payload for the fake domain."""
+    return {
+        "artifacts": [
+            {"artifact_type_id": artifact_type_id, "title": text, "text": text}
+            for text in texts
+        ]
+    }
+
+
+def count_records(db_session, model: type) -> int:
+    """Return the number of persisted rows for one ORM model."""
+    return int(db_session.scalar(select(sa.func.count()).select_from(model)) or 0)
+
+
+def test_context_batch_api_ingests_artifacts_in_request_order(
+    client, db_session
+) -> None:
+    headers = access_headers(client, "context-batch")
+
+    response = client.post(
+        "/api/context/domains/test-domain/artifact-batches",
+        headers={**headers, "Idempotency-Key": "batch-1"},
+        json=batch_payload("First batch note", "Second batch note", "Third"),
+    )
+
+    assert response.status_code == 201
+    results = response.json()["results"]
+    assert [result["artifact"]["text"] for result in results] == [
+        "First batch note",
+        "Second batch note",
+        "Third",
+    ]
+    for result in results:
+        assert result["extractor_ids"] == ["test-domain-extractor"]
+        assert [item["item_type"] for item in result["actionable_items"]] == [
+            "test_action",
+            "test_generated_task",
+        ]
+        assert result["chunks"][0]["artifact_id"] == result["artifact"]["id"]
+    listed = client.get("/api/context/domains/test-domain/artifacts", headers=headers)
+    assert [artifact["id"] for artifact in listed.json()["artifacts"]] == [
+        result["artifact"]["id"] for result in results
+    ]
+    assert count_records(db_session, ContextIngestionBatchRecord) == 1
+
+
+def test_context_batch_api_requires_idempotency_key(client) -> None:
+    headers = access_headers(client, "context-batch-key")
+
+    missing = client.post(
+        "/api/context/domains/test-domain/artifact-batches",
+        headers=headers,
+        json=batch_payload("note"),
+    )
+    blank = client.post(
+        "/api/context/domains/test-domain/artifact-batches",
+        headers={**headers, "Idempotency-Key": "   "},
+        json=batch_payload("note"),
+    )
+    too_long = client.post(
+        "/api/context/domains/test-domain/artifact-batches",
+        headers={**headers, "Idempotency-Key": "k" * 256},
+        json=batch_payload("note"),
+    )
+
+    assert missing.status_code == 400
+    assert missing.json()["detail"] == (
+        "Idempotency-Key header is required for batch ingestion."
+    )
+    assert blank.status_code == 400
+    assert too_long.status_code == 400
+    listed = client.get("/api/context/domains/test-domain/artifacts", headers=headers)
+    assert listed.json()["artifacts"] == []
+
+
+def test_context_batch_api_enforces_batch_size(client) -> None:
+    headers = {
+        **access_headers(client, "context-batch-size"),
+        "Idempotency-Key": "batch-size",
+    }
+
+    empty = client.post(
+        "/api/context/domains/test-domain/artifact-batches",
+        headers=headers,
+        json={"artifacts": []},
+    )
+    too_many = client.post(
+        "/api/context/domains/test-domain/artifact-batches",
+        headers=headers,
+        json=batch_payload(*[f"note {index}" for index in range(21)]),
+    )
+    maximum = client.post(
+        "/api/context/domains/test-domain/artifact-batches",
+        headers=headers,
+        json=batch_payload(*[f"note {index}" for index in range(20)]),
+    )
+
+    assert empty.status_code == 422
+    assert too_many.status_code == 422
+    assert maximum.status_code == 201
+    assert len(maximum.json()["results"]) == 20
+
+
+def test_context_batch_api_is_atomic_when_one_artifact_fails(
+    client, db_session
+) -> None:
+    headers = access_headers(client, "context-batch-atomic")
+    payload = {
+        "artifacts": [
+            {"artifact_type_id": "note", "text": "Valid note"},
+            {"artifact_type_id": "missing-type", "text": "Another valid note"},
+        ]
+    }
+
+    response = client.post(
+        "/api/context/domains/test-domain/artifact-batches",
+        headers={**headers, "Idempotency-Key": "atomic"},
+        json=payload,
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"].startswith("artifacts[1]: Artifact type")
+    for model in (
+        ContextArtifactRecord,
+        ContextArtifactChunkRecord,
+        ContextEntityRecord,
+        ContextSignalRecord,
+        ContextActionableItemRecord,
+        ContextSourceLinkRecord,
+        ContextIngestionBatchRecord,
+    ):
+        assert count_records(db_session, model) == 0
+
+    retried = client.post(
+        "/api/context/domains/test-domain/artifact-batches",
+        headers={**headers, "Idempotency-Key": "atomic"},
+        json=batch_payload("Valid note", "Another valid note"),
+    )
+    assert retried.status_code == 201
+
+
+def test_context_batch_api_rejects_missing_domain(client) -> None:
+    headers = access_headers(client, "context-batch-domain")
+
+    response = client.post(
+        "/api/context/domains/missing-domain/artifact-batches",
+        headers={**headers, "Idempotency-Key": "missing-domain"},
+        json=batch_payload("note"),
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Context domain not found."
+
+
+def test_context_batch_api_replays_and_conflicts_on_idempotency_key(
+    client, db_session
+) -> None:
+    headers = {
+        **access_headers(client, "context-batch-replay"),
+        "Idempotency-Key": "replay",
+    }
+    first = client.post(
+        "/api/context/domains/test-domain/artifact-batches",
+        headers=headers,
+        json=batch_payload("Replay one", "Replay two"),
+    )
+    reordered_keys = {
+        "artifacts": [
+            {"text": text, "metadata": {}, "title": text, "artifact_type_id": "note"}
+            for text in ("Replay one", "Replay two")
+        ]
+    }
+    replay = client.post(
+        "/api/context/domains/test-domain/artifact-batches",
+        headers=headers,
+        json=reordered_keys,
+    )
+    conflict = client.post(
+        "/api/context/domains/test-domain/artifact-batches",
+        headers=headers,
+        json=batch_payload("Replay one", "Changed"),
+    )
+
+    assert first.status_code == 201
+    assert replay.status_code == 201
+    assert replay.json() == first.json()
+    assert conflict.status_code == 409
+    assert count_records(db_session, ContextArtifactRecord) == 2
+    assert count_records(db_session, ContextIngestionBatchRecord) == 1
+
+
+def test_context_idempotency_keys_are_scoped_to_owner(client) -> None:
+    owner_headers = access_headers(client, "context-key-owner")
+    other_headers = access_headers(client, "context-key-other")
+
+    owner = client.post(
+        "/api/context/domains/test-domain/artifact-batches",
+        headers={**owner_headers, "Idempotency-Key": "shared"},
+        json=batch_payload("Owner note"),
+    )
+    other = client.post(
+        "/api/context/domains/test-domain/artifact-batches",
+        headers={**other_headers, "Idempotency-Key": "shared"},
+        json=batch_payload("Other note"),
+    )
+
+    assert owner.status_code == 201
+    assert other.status_code == 201
+    assert (
+        owner.json()["results"][0]["artifact"]["id"]
+        != other.json()["results"][0]["artifact"]["id"]
+    )
+
+
+def test_context_artifact_api_supports_optional_idempotency_key(
+    client, db_session
+) -> None:
+    headers = access_headers(client, "context-single-key")
+    payload = {"artifact_type_id": "note", "text": "Idempotent single note"}
+
+    without_key = client.post(
+        "/api/context/domains/test-domain/artifacts", headers=headers, json=payload
+    )
+    first = client.post(
+        "/api/context/domains/test-domain/artifacts",
+        headers={**headers, "Idempotency-Key": "single"},
+        json=payload,
+    )
+    replay = client.post(
+        "/api/context/domains/test-domain/artifacts",
+        headers={**headers, "Idempotency-Key": "single"},
+        json=payload,
+    )
+    conflict = client.post(
+        "/api/context/domains/test-domain/artifacts",
+        headers={**headers, "Idempotency-Key": "single"},
+        json={**payload, "text": "Different single note"},
+    )
+    cross_endpoint = client.post(
+        "/api/context/domains/test-domain/artifact-batches",
+        headers={**headers, "Idempotency-Key": "single"},
+        json={"artifacts": [payload]},
+    )
+
+    assert without_key.status_code == 201
+    assert first.status_code == 201
+    assert replay.status_code == 201
+    assert replay.json() == first.json()
+    assert conflict.status_code == 409
+    assert cross_endpoint.status_code == 409
+    assert count_records(db_session, ContextArtifactRecord) == 2
+    assert count_records(db_session, ContextIngestionBatchRecord) == 1
+
+
+def test_context_upload_api_supports_optional_idempotency_key(
+    client, db_session
+) -> None:
+    headers = {
+        **access_headers(client, "context-upload-key"),
+        "Idempotency-Key": "upload",
+    }
+
+    def upload(content: bytes):
+        return client.post(
+            "/api/context/domains/test-domain/artifact-uploads",
+            headers=headers,
+            data={"artifact_type_id": "note", "metadata_json": '{"a":1,"b":2}'},
+            files={"file": ("note.txt", content, "text/plain")},
+        )
+
+    first = upload(b"Uploaded idempotent note.")
+    replay = upload(b"Uploaded idempotent note.")
+    conflict = upload(b"Changed upload content.")
+
+    assert first.status_code == 201
+    assert replay.status_code == 201
+    assert replay.json() == first.json()
+    assert conflict.status_code == 409
+    assert count_records(db_session, ContextArtifactRecord) == 1
+
+
+def test_context_upload_api_preserves_error_handling(client) -> None:
+    headers = access_headers(client, "context-upload-errors")
+
+    unsupported = client.post(
+        "/api/context/domains/test-domain/artifact-uploads",
+        headers=headers,
+        data={"artifact_type_id": "note"},
+        files={"file": ("image.png", b"\x89PNG", "image/png")},
+    )
+    bad_metadata = client.post(
+        "/api/context/domains/test-domain/artifact-uploads",
+        headers=headers,
+        data={"artifact_type_id": "note", "metadata_json": "[1]"},
+        files={"file": ("note.txt", b"content", "text/plain")},
+    )
+    missing_domain = client.post(
+        "/api/context/domains/missing-domain/artifact-uploads",
+        headers=headers,
+        data={"artifact_type_id": "note"},
+        files={"file": ("note.txt", b"content", "text/plain")},
+    )
+
+    assert unsupported.status_code == 400
+    assert unsupported.json()["detail"] == (
+        "Only text files and extractable PDFs are supported."
+    )
+    assert bad_metadata.status_code == 400
+    assert bad_metadata.json()["detail"] == "metadata_json must be a JSON object."
+    assert missing_domain.status_code == 404

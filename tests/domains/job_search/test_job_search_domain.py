@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import pytest
 
-from app.core.context_engine.models import IngestionRequest, OwnerType
+from app.core.context_engine.chunking import SimpleTextChunker
+from app.core.context_engine.models import Artifact, IngestionRequest, OwnerType
 from app.core.context_engine.registry import DomainRegistry
 from app.core.context_engine.service import ContextEngineService
 from app.core.context_engine.storage import InMemoryContextRepository
 from app.domains.job_search import build_job_search_domain_pack
-from app.domains.job_search.models import ARTIFACT_TYPE_IDS
+from app.domains.job_search.models import ARTIFACT_TYPE_IDS, source_for_match
 
 
 def build_service() -> ContextEngineService:
@@ -237,3 +238,21 @@ def test_invalid_job_search_artifact_type_is_rejected() -> None:
 
     with pytest.raises(ValueError, match="Artifact type"):
         ingest(service, "cover_letter", "Unsupported source.")
+
+
+def test_source_for_match_offsets_use_original_text_positions() -> None:
+    artifact = Artifact(
+        domain_id="job_search",
+        artifact_type_id="resume",
+        owner_type=OwnerType.INVITATION_CODE,
+        owner_id="invite-1",
+        text="İİİ Led Kubernetes migration",
+    )
+    chunks = SimpleTextChunker().chunk(artifact)
+
+    link = source_for_match(chunks, "led kubernetes migration")
+
+    assert link.start_offset is not None and link.end_offset is not None
+    assert (
+        artifact.text[link.start_offset : link.end_offset] == "Led Kubernetes migration"
+    )

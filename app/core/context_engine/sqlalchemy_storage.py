@@ -7,8 +7,10 @@ from collections.abc import Callable
 from typing import Any, cast
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.core.context_engine.errors import IdempotencyKeyExistsError
 from app.core.context_engine.models import (
     ActionableItem,
     Artifact,
@@ -16,16 +18,20 @@ from app.core.context_engine.models import (
     ContextEntity,
     ContextRelationship,
     ContextSignal,
+    IngestionBatch,
+    IngestionResult,
     OwnerType,
     PerspectiveView,
     ReadinessStatus,
     SourceLink,
 )
+from app.core.context_engine.validation import validate_ingestion_batch
 from app.models.context_engine import (
     ContextActionableItemRecord,
     ContextArtifactChunkRecord,
     ContextArtifactRecord,
     ContextEntityRecord,
+    ContextIngestionBatchRecord,
     ContextPerspectiveViewRecord,
     ContextRelationshipRecord,
     ContextSignalRecord,
@@ -51,220 +57,186 @@ def _source_links_load(value: str | None) -> list[SourceLink]:
     return [SourceLink(**item) for item in _json_load(value, [])]
 
 
-OwnerCache = dict[str, tuple[str, OwnerType, str] | None]
-
-
-def _owner_from_required_sources(
-    session: Session,
-    links: list[SourceLink],
-    cache: OwnerCache,
-    record_type: str,
-    record_id: str,
-) -> tuple[str, OwnerType, str]:
-    if not links:
-        raise ValueError(f"{record_type} '{record_id}' must include source links.")
-    for link in links:
-        if link.artifact_id not in cache:
-            artifact = session.get(ContextArtifactRecord, link.artifact_id)
-            cache[link.artifact_id] = (
-                (
-                    artifact.domain_id,
-                    OwnerType(artifact.owner_type),
-                    artifact.owner_id,
-                )
-                if artifact is not None
-                else None
-            )
-        owner = cache[link.artifact_id]
-        if owner is not None:
-            return owner
-    raise ValueError(
-        f"{record_type} '{record_id}' references unknown source artifact "
-        f"'{links[0].artifact_id}'."
-    )
-
-
 class SQLAlchemyContextRepository:
     """Durable repository for generic Context Engine records."""
 
     def __init__(self, session_factory: Callable[[], Session]) -> None:
         self.session_factory = session_factory
 
-    def store_artifact(self, artifact: Artifact) -> Artifact:
-        """Persist one artifact."""
-        with self.session_factory() as session:
-            session.add(
-                ContextArtifactRecord(
-                    id=artifact.id,
-                    domain_id=artifact.domain_id,
-                    artifact_type_id=artifact.artifact_type_id,
-                    owner_type=artifact.owner_type.value,
-                    owner_id=artifact.owner_id,
-                    title=artifact.title,
-                    text=artifact.text,
-                    source_uri=artifact.source_uri,
-                    metadata_json=_json_dump(artifact.metadata),
-                    created_at=artifact.created_at,
-                )
-            )
-            session.commit()
-        return artifact
+    def store_ingestion_batch(self, batch: IngestionBatch) -> IngestionBatch:
+        """Persist one validated ingestion batch with a single commit.
 
-    def store_chunks(self, chunks: list[ArtifactChunk]) -> list[ArtifactChunk]:
-        """Persist artifact chunks."""
+        The idempotency record is flushed first so a concurrent request using
+        the same owner/domain-scoped key fails on the unique constraint before
+        any context rows are written. Any failure rolls back the whole batch.
+        """
+        validate_ingestion_batch(batch)
         with self.session_factory() as session:
-            for chunk in chunks:
-                session.add(
-                    ContextArtifactChunkRecord(
-                        id=chunk.id,
-                        artifact_id=chunk.artifact_id,
-                        chunk_index=chunk.chunk_index,
-                        text=chunk.text,
-                        start_offset=chunk.start_offset,
-                        end_offset=chunk.end_offset,
-                        source_link_json=_json_dump(
-                            chunk.source_link.model_dump(mode="json")
-                        ),
-                        metadata_json=_json_dump(chunk.metadata),
-                    )
-                )
-                self._add_source_link_record(session, chunk.source_link)
-            session.commit()
-        return chunks
+            try:
+                if batch.idempotency_key is not None:
+                    session.add(self._batch_record(batch))
+                    try:
+                        session.flush()
+                    except IntegrityError as exc:
+                        session.rollback()
+                        raise IdempotencyKeyExistsError(
+                            "An ingestion batch already exists for this "
+                            "idempotency key."
+                        ) from exc
+                for result in batch.results:
+                    session.add(self._artifact_record(result.artifact))
+                session.flush()
+                for result in batch.results:
+                    self._add_result_records(session, result)
+                session.commit()
+            except IntegrityError as exc:
+                session.rollback()
+                raise ValueError(
+                    "Ingestion batch conflicts with existing Context Engine records."
+                ) from exc
+            except BaseException:
+                session.rollback()
+                raise
+        return batch
 
-    def store_entities(self, entities: list[ContextEntity]) -> list[ContextEntity]:
-        """Persist context entities."""
-        with self.session_factory() as session:
-            owner_cache: OwnerCache = {}
-            for entity in entities:
-                owner = _owner_from_required_sources(
-                    session,
-                    entity.source_links,
-                    owner_cache,
-                    "ContextEntity",
-                    entity.id,
-                )
-                domain_id, owner_type, owner_id = owner
-                session.add(
-                    ContextEntityRecord(
-                        id=entity.id,
-                        domain_id=domain_id,
-                        owner_type=owner_type.value,
-                        owner_id=owner_id,
-                        entity_type=entity.entity_type,
-                        name=entity.name,
-                        source_links_json=_source_links_dump(entity.source_links),
-                        metadata_json=_json_dump(entity.metadata),
-                    )
-                )
-                self._add_source_link_records(session, entity.source_links)
-            session.commit()
-        return entities
-
-    def store_relationships(
-        self, relationships: list[ContextRelationship]
-    ) -> list[ContextRelationship]:
-        """Persist context relationships."""
-        with self.session_factory() as session:
-            owner_cache: OwnerCache = {}
-            for relationship in relationships:
-                owner = _owner_from_required_sources(
-                    session,
-                    relationship.source_links,
-                    owner_cache,
-                    "ContextRelationship",
-                    relationship.id,
-                )
-                domain_id, owner_type, owner_id = owner
-                session.add(
-                    ContextRelationshipRecord(
-                        id=relationship.id,
-                        domain_id=domain_id,
-                        owner_type=owner_type.value,
-                        owner_id=owner_id,
-                        relationship_type=relationship.relationship_type,
-                        source_entity_id=relationship.source_entity_id,
-                        target_entity_id=relationship.target_entity_id,
-                        source_links_json=_source_links_dump(relationship.source_links),
-                        metadata_json=_json_dump(relationship.metadata),
-                    )
-                )
-                self._add_source_link_records(session, relationship.source_links)
-            session.commit()
-        return relationships
-
-    def store_signals(self, signals: list[ContextSignal]) -> list[ContextSignal]:
-        """Persist context signals."""
-        with self.session_factory() as session:
-            owner_cache: OwnerCache = {}
-            for signal in signals:
-                owner = _owner_from_required_sources(
-                    session,
-                    signal.source_links,
-                    owner_cache,
-                    "ContextSignal",
-                    signal.id,
-                )
-                domain_id, owner_type, owner_id = owner
-                session.add(
-                    ContextSignalRecord(
-                        id=signal.id,
-                        domain_id=domain_id,
-                        owner_type=owner_type.value,
-                        owner_id=owner_id,
-                        signal_type=signal.signal_type,
-                        label=signal.label,
-                        value_json=_json_dump(signal.value),
-                        source_links_json=_source_links_dump(signal.source_links),
-                        metadata_json=_json_dump(signal.metadata),
-                    )
-                )
-                self._add_source_link_records(session, signal.source_links)
-            session.commit()
-        return signals
-
-    def store_actionable_items(
-        self, items: list[ActionableItem]
-    ) -> list[ActionableItem]:
-        """Persist actionable items."""
-        with self.session_factory() as session:
-            owner_cache: OwnerCache = {}
-            for item in items:
-                owner = _owner_from_required_sources(
-                    session,
-                    item.source_links,
-                    owner_cache,
-                    "ActionableItem",
-                    item.id,
-                )
-                domain_id, owner_type, owner_id = owner
-                session.add(
-                    ContextActionableItemRecord(
-                        id=item.id,
-                        domain_id=domain_id,
-                        owner_type=owner_type.value,
-                        owner_id=owner_id,
-                        item_type=item.item_type,
-                        title=item.title,
-                        description=item.description,
-                        readiness_status=item.readiness_status.value,
-                        source_links_json=_source_links_dump(item.source_links),
-                        metadata_json=_json_dump(item.metadata),
-                    )
-                )
-                self._add_source_link_records(session, item.source_links)
-            session.commit()
-        return items
-
-    def index_artifact_outputs(
+    def get_ingestion_batch(
         self,
         *,
-        artifact: Artifact,
-        signals: list[ContextSignal],
-        actionable_items: list[ActionableItem],
-    ) -> None:
-        """Durable tables are directly owner-scoped, so no extra index is needed."""
-        del artifact, signals, actionable_items
+        domain_id: str,
+        owner_type: OwnerType,
+        owner_id: str,
+        idempotency_key: str,
+    ) -> IngestionBatch | None:
+        """Return the stored batch for one owner/domain-scoped idempotency key."""
+        with self.session_factory() as session:
+            record = session.scalar(
+                select(ContextIngestionBatchRecord)
+                .where(ContextIngestionBatchRecord.domain_id == domain_id)
+                .where(ContextIngestionBatchRecord.owner_type == owner_type.value)
+                .where(ContextIngestionBatchRecord.owner_id == owner_id)
+                .where(ContextIngestionBatchRecord.idempotency_key == idempotency_key)
+            )
+            if record is None:
+                return None
+            return IngestionBatch(
+                id=record.id,
+                domain_id=record.domain_id,
+                owner_type=OwnerType(record.owner_type),
+                owner_id=record.owner_id,
+                idempotency_key=record.idempotency_key,
+                request_fingerprint=record.request_fingerprint,
+                results=[
+                    IngestionResult.model_validate(item)
+                    for item in _json_load(record.results_json, [])
+                ],
+                created_at=record.created_at,
+            )
+
+    def _batch_record(self, batch: IngestionBatch) -> ContextIngestionBatchRecord:
+        return ContextIngestionBatchRecord(
+            id=batch.id,
+            domain_id=batch.domain_id,
+            owner_type=batch.owner_type.value,
+            owner_id=batch.owner_id,
+            idempotency_key=batch.idempotency_key,
+            request_fingerprint=batch.request_fingerprint,
+            artifact_count=len(batch.results),
+            results_json=_json_dump(
+                [result.model_dump(mode="json") for result in batch.results]
+            ),
+            created_at=batch.created_at,
+        )
+
+    def _artifact_record(self, artifact: Artifact) -> ContextArtifactRecord:
+        return ContextArtifactRecord(
+            id=artifact.id,
+            domain_id=artifact.domain_id,
+            artifact_type_id=artifact.artifact_type_id,
+            owner_type=artifact.owner_type.value,
+            owner_id=artifact.owner_id,
+            title=artifact.title,
+            text=artifact.text,
+            source_uri=artifact.source_uri,
+            metadata_json=_json_dump(artifact.metadata),
+            created_at=artifact.created_at,
+        )
+
+    def _add_result_records(self, session: Session, result: IngestionResult) -> None:
+        """Add chunk, derived-record, and source-link rows for one artifact."""
+        artifact = result.artifact
+        owner = {
+            "domain_id": artifact.domain_id,
+            "owner_type": artifact.owner_type.value,
+            "owner_id": artifact.owner_id,
+        }
+        for chunk in result.chunks:
+            session.add(
+                ContextArtifactChunkRecord(
+                    id=chunk.id,
+                    artifact_id=chunk.artifact_id,
+                    chunk_index=chunk.chunk_index,
+                    text=chunk.text,
+                    start_offset=chunk.start_offset,
+                    end_offset=chunk.end_offset,
+                    source_link_json=_json_dump(
+                        chunk.source_link.model_dump(mode="json")
+                    ),
+                    metadata_json=_json_dump(chunk.metadata),
+                )
+            )
+            self._add_source_link_record(session, chunk.source_link)
+        for entity in result.entities:
+            session.add(
+                ContextEntityRecord(
+                    id=entity.id,
+                    **owner,
+                    entity_type=entity.entity_type,
+                    name=entity.name,
+                    source_links_json=_source_links_dump(entity.source_links),
+                    metadata_json=_json_dump(entity.metadata),
+                )
+            )
+            self._add_source_link_records(session, entity.source_links)
+        for relationship in result.relationships:
+            session.add(
+                ContextRelationshipRecord(
+                    id=relationship.id,
+                    **owner,
+                    relationship_type=relationship.relationship_type,
+                    source_entity_id=relationship.source_entity_id,
+                    target_entity_id=relationship.target_entity_id,
+                    source_links_json=_source_links_dump(relationship.source_links),
+                    metadata_json=_json_dump(relationship.metadata),
+                )
+            )
+            self._add_source_link_records(session, relationship.source_links)
+        for signal in result.signals:
+            session.add(
+                ContextSignalRecord(
+                    id=signal.id,
+                    **owner,
+                    signal_type=signal.signal_type,
+                    label=signal.label,
+                    value_json=_json_dump(signal.value),
+                    source_links_json=_source_links_dump(signal.source_links),
+                    metadata_json=_json_dump(signal.metadata),
+                )
+            )
+            self._add_source_link_records(session, signal.source_links)
+        for item in result.actionable_items:
+            session.add(
+                ContextActionableItemRecord(
+                    id=item.id,
+                    **owner,
+                    item_type=item.item_type,
+                    title=item.title,
+                    description=item.description,
+                    readiness_status=item.readiness_status.value,
+                    source_links_json=_source_links_dump(item.source_links),
+                    metadata_json=_json_dump(item.metadata),
+                )
+            )
+            self._add_source_link_records(session, item.source_links)
 
     def list_artifacts(
         self,

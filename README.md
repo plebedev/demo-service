@@ -96,7 +96,9 @@ Current backend responsibilities:
 
 - register zero, one, or many domain packs through `DomainRegistry`
 - expose generic extension contracts for `ArtifactIngestor`, `ArtifactChunker`, `Extractor`, `PerspectiveBuilder`, `TaskGenerator`, and `ViewDefinition`
-- ingest artifacts through a generic orchestration flow
+- ingest artifacts through a generic orchestration flow, one at a time or as
+  atomic batches of up to 20 artifacts
+- support `Idempotency-Key` replay for artifact ingestion
 - split artifacts into source-linked chunks
 - run registered extractors and task generators
 - store generic entities, relationships, signals, and actionable items through repository abstractions
@@ -112,14 +114,17 @@ app/
 |-- core/
 |   `-- context_engine/
 |       |-- chunking.py
+|       |-- errors.py
 |       |-- factory.py
+|       |-- idempotency.py
 |       |-- interfaces.py
 |       |-- llm.py
 |       |-- models.py
 |       |-- registry.py
 |       |-- service.py
 |       |-- sqlalchemy_storage.py
-|       `-- storage.py
+|       |-- storage.py
+|       `-- validation.py
 |-- domains/
 |   |-- job_search/
 |   `-- test_domain/
@@ -146,11 +151,18 @@ loaded by the app factory only when `ENVIRONMENT=test`.
 
 Context Engine persistence is behind `ContextRepository`. The runtime app uses
 `SQLAlchemyContextRepository` with generic tables for artifacts, chunks,
-entities, relationships, signals, actionable items, and source-link audit rows.
-Structured payloads are serialized into text columns rather than native JSON
-columns for Oracle compatibility. Derived records must carry source links; the
-SQLAlchemy repository rejects source-link-less outputs instead of silently
-dropping them. No graph database or separate vector database is used.
+entities, relationships, signals, actionable items, source-link audit rows, and
+ingestion-batch idempotency records. Structured payloads are serialized into
+text columns rather than native JSON columns for Oracle compatibility, and
+idempotency relies on a portable unique constraint rather than database-specific
+locking. Ingestion output is written through one `store_ingestion_batch` call
+that commits once per batch, so a failure for any artifact leaves no records
+behind. Both repositories run the shared validation in
+`app/core/context_engine/validation.py` before writing: chunks and derived
+records must have source links that point at the artifact that produced them,
+at that artifact's own chunks, and at offsets inside the referenced text.
+Records that fail these checks are rejected, never silently dropped. No graph
+database or separate vector database is used.
 
 Context Engine LLM steps reuse the existing PydanticAI model path in
 `app.services.model_factory`; no provider calls live in domain packs. Generic
@@ -217,6 +229,7 @@ The generic Context Engine routes are protected by the existing signed access to
 GET  /api/context/domains
 GET  /api/context/domains/{domain_id}
 POST /api/context/domains/{domain_id}/artifacts
+POST /api/context/domains/{domain_id}/artifact-batches
 POST /api/context/domains/{domain_id}/artifact-uploads
 GET  /api/context/domains/{domain_id}/artifacts
 GET  /api/context/domains/{domain_id}/artifacts/{artifact_id}
@@ -228,18 +241,40 @@ GET  /api/context/domains/{domain_id}/views/{view_definition_id}
 
 These APIs intentionally avoid domain-specific top-level paths such as `/jobs`, `/interviews`, or `/resume-analysis`.
 
-The ingestion flow is:
+The ingestion flow is the same for single artifacts, uploads, and batches:
 
 ```text
-validate domain
-  -> store artifact
-  -> chunk artifact
-  -> run registered extractors
-  -> run registered task generators
-  -> store generic outputs
-  -> preserve source links
-  -> return ingestion result
+validate domain, owner scope, and every artifact in the request
+  -> replay stored results if the Idempotency-Key was already used
+  -> for each artifact, in request order:
+       chunk artifact
+       run registered extractors (registration order)
+       run registered task generators (registration order)
+       validate provenance against the producing artifact
+  -> persist artifacts, chunks, outputs, source links, and the idempotency
+     record in one transaction with a single commit
+  -> return ingestion results in request order
 ```
+
+Batch ingestion accepts 1 to 20 artifacts using the single-artifact request
+model and returns `{"results": [...]}` with one single-artifact ingestion
+result per artifact. Batches are atomic: if validation, extraction, task
+generation, provenance checking, or persistence fails for any artifact, nothing
+is stored. Validation errors return `400` with an `artifacts[<index>]: ` prefix,
+unknown domains return `404`, and body schema violations (including batch size)
+return `422`.
+
+Idempotency uses the `Idempotency-Key` header (1 to 255 characters). It is
+required for `artifact-batches` and optional for `artifacts` and
+`artifact-uploads`. Keys are scoped to the authenticated owner and the context
+domain. Repeating a request with the same key and an equivalent payload returns
+the originally stored results without rerunning extraction or creating
+duplicates. Reusing a key with a different payload, or on a different ingestion
+endpoint, returns `409`. Concurrent requests with the same key race on a unique
+constraint; only one batch is committed, and the others replay its results (or
+receive `409` if their payload differs). Failed requests do not record their
+key, so they can be retried with the same key. Upload fingerprints cover the
+form fields, file name, content type, and a SHA-256 hash of the file bytes.
 
 Example job-search ingestion:
 
@@ -248,6 +283,16 @@ curl -X POST "$BACKEND/api/context/domains/job_search/artifacts" \
   -H "Authorization: Bearer $ACCESS_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"artifact_type_id":"job_description","title":"Staff Platform Engineer","text":"Title: Staff Platform Engineer\nCompany: Acme AI\nResponsibilities: lead Kubernetes and AI platform work."}'
+```
+
+Example atomic batch ingestion:
+
+```bash
+curl -X POST "$BACKEND/api/context/domains/job_search/artifact-batches" \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: $(uuidgen)" \
+  -d '{"artifacts":[{"artifact_type_id":"resume","text":"Senior engineer..."},{"artifact_type_id":"job_description","text":"Title: Staff Platform Engineer..."}]}'
 ```
 
 Example file upload:

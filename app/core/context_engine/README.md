@@ -18,10 +18,19 @@ Execution modes:
 - `llm`: prefer structured model output, with deterministic fallback.
 - `hybrid`: preserve deterministic output and add/refine model output.
 
+Ingestion is atomic. `ContextEngineService.ingest_artifacts` runs extensions for
+every request in memory, then hands one `IngestionBatch` to
+`ContextRepository.store_ingestion_batch`, which persists everything with a
+single commit or nothing at all. Single-artifact ingestion is a batch of one.
+Optional `IngestionIdempotency` input makes repeats return stored results; keys
+are scoped to domain and owner (`idempotency.py`, `errors.py`).
+
 Core source-grounding expectations are generic: derived records need
-`SourceLink`/`EvidenceLink` references, and storage rejects durable entities,
-relationships, signals, and actionable items without source links. Domain packs
-may add stricter validation before output is persisted.
+`SourceLink`/`EvidenceLink` references, and `validation.py` rejects chunks and
+derived records whose links point at another artifact, at a chunk the
+producing artifact does not own, or at offsets outside the referenced text.
+Both repository implementations apply the same validation. Domain packs may add
+stricter validation before output is persisted.
 
 Domain packs may also declare context dependency graphs for their own
 perspectives. The core remains neutral: it provides owner-scoped artifacts,

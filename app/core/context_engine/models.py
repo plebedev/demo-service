@@ -189,6 +189,26 @@ class IngestionResult(BaseModel):
     extractor_ids: list[str]
 
 
+class IngestionIdempotency(BaseModel):
+    """Caller-supplied idempotency key with the fingerprint of its request."""
+
+    key: str = Field(min_length=1, max_length=255)
+    fingerprint: str = Field(min_length=1, max_length=128)
+
+
+class IngestionBatch(BaseModel):
+    """Atomic unit of artifact ingestion persisted by one repository call."""
+
+    id: str = Field(default_factory=lambda: new_context_id("batch"))
+    domain_id: str
+    owner_type: OwnerType
+    owner_id: str
+    idempotency_key: str | None = None
+    request_fingerprint: str | None = None
+    results: list[IngestionResult] = Field(min_length=1)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
 class PerspectiveBuildContext(BaseModel):
     """Owner-scoped generic context used to materialize a perspective view."""
 

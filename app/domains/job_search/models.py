@@ -50,11 +50,12 @@ def source_for_match(
 ) -> SourceLink:
     """Return a source link for a matched excerpt."""
     needle = match_text.strip()
+    pattern = re.compile(re.escape(needle), re.IGNORECASE)
     for chunk in chunks:
-        offset = chunk.text.lower().find(needle.lower())
-        if offset >= 0:
-            start = chunk.start_offset + offset
-            end = start + len(needle)
+        match = pattern.search(chunk.text)
+        if match is not None:
+            start = chunk.start_offset + match.start()
+            end = chunk.start_offset + match.end()
             return SourceLink(
                 artifact_id=chunk.artifact_id,
                 chunk_id=chunk.id,

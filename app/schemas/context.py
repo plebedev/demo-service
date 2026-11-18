@@ -17,6 +17,9 @@ from app.core.context_engine.models import (
     PerspectiveView,
 )
 
+MIN_ARTIFACT_BATCH_SIZE = 1
+MAX_ARTIFACT_BATCH_SIZE = 20
+
 
 class ExtensionSummaryResponse(BaseModel):
     """Public metadata for a registered runtime extension."""
@@ -75,6 +78,21 @@ class ContextArtifactIngestResponse(BaseModel):
     signals: list[ContextSignal]
     actionable_items: list[ActionableItem]
     extractor_ids: list[str]
+
+
+class ContextArtifactBatchCreateRequest(BaseModel):
+    """API request to ingest several generic artifacts atomically."""
+
+    artifacts: list[ContextArtifactCreateRequest] = Field(
+        min_length=MIN_ARTIFACT_BATCH_SIZE,
+        max_length=MAX_ARTIFACT_BATCH_SIZE,
+    )
+
+
+class ContextArtifactBatchIngestResponse(BaseModel):
+    """API response for atomic batch ingestion, in request order."""
+
+    results: list[ContextArtifactIngestResponse]
 
 
 class ContextArtifactListResponse(BaseModel):

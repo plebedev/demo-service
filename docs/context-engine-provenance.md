@@ -15,6 +15,24 @@ sections can all carry provenance through source links or evidence links.
 Durable storage keeps source links both embedded in generic output records and
 as `context_source_links` audit rows.
 
+Before anything is persisted, both repositories validate ingestion output with
+`app/core/context_engine/validation.py`:
+
+- every chunk belongs to the artifact that produced it, has a unique index, and
+  has offsets inside the artifact text; its own source link must point at that
+  artifact and, when it names a chunk, at the chunk itself
+- every entity, relationship, signal, and actionable item has at least one
+  source link, and every link points at the producing artifact
+- a link that names a chunk must name one of the producing artifact's chunks,
+  and its offsets must fall inside that chunk (or inside the artifact text when
+  no chunk is named)
+- every artifact in a batch matches the batch domain and owner, and record ids
+  are unique within the batch
+
+Durable derived records take their domain and owner from the producing
+artifact, so a link cannot attach output to another owner's namespace. A
+validation failure rejects the whole ingestion batch.
+
 Artifact list/detail APIs expose the original owner-scoped source records back
 to the frontend so evidence links can navigate to the underlying artifact. View
 sections label evidence as explicit or inferred through section metadata and

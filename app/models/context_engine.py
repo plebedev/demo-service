@@ -163,6 +163,39 @@ class ContextPerspectiveViewRecord(Base):
     )
 
 
+class ContextIngestionBatchRecord(Base):
+    """Persisted idempotency record for one atomic artifact ingestion batch.
+
+    Rows exist only for requests that supplied an idempotency key. Stored
+    results are serialized into a text column for Oracle compatibility.
+    """
+
+    __tablename__ = "context_ingestion_batches"
+    __table_args__ = (
+        UniqueConstraint(
+            "domain_id",
+            "owner_type",
+            "owner_id",
+            "idempotency_key",
+            name="uq_context_ingestion_batches_idempotency",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    domain_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    owner_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    owner_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    request_fingerprint: Mapped[str] = mapped_column(String(128), nullable=False)
+    artifact_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    results_json: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+
+
 class ContextSourceLinkRecord(Base):
     """Persisted source-link audit row for derived context."""
 
