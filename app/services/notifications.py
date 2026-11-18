@@ -78,16 +78,36 @@ def maybe_send_completion_notification(
     db: Session, run: Run, settings: Settings | None = None
 ) -> None:
     """Send the coded completion SMS if the run preference permits it."""
+    if run.status != RunStatus.COMPLETED.value:
+        return
+    send_completion_notification(db, run, settings)
+
+
+def completion_notification_recorded(db: Session, run: Run) -> bool:
+    """Return whether a completion SMS was already attempted or skipped."""
+    return (
+        db.query(SmsMessage.id)
+        .filter(SmsMessage.run_id == run.id, SmsMessage.direction == "outbound")
+        .first()
+        is not None
+    )
+
+
+def send_completion_notification(
+    db: Session, run: Run, settings: Settings | None = None
+) -> None:
+    """Send the completion SMS for a run whose workflow has finished.
+
+    The workflow executor calls this before the run is finalized as completed,
+    so this function does not re-check the run lifecycle status. An "attempted"
+    outbound message is committed before contacting the provider, which lets
+    recovery detect an interrupted send and avoid sending twice.
+    """
     settings = settings or get_settings()
     if not settings.sms_notification_enabled:
         return
     preference = _load_notification_preference(run)
-    if (
-        run.status != RunStatus.COMPLETED.value
-        or preference is None
-        or not preference.wants_sms
-        or not preference.phone_number
-    ):
+    if preference is None or not preference.wants_sms or not preference.phone_number:
         return
 
     phone_number = _normalize_us_phone(preference.phone_number)

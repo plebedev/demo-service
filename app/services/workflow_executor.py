@@ -1,16 +1,18 @@
-"""Bounded runtime execution for the messy-notes workflow."""
+"""Bounded, recoverable runtime execution for the messy-notes workflows."""
 
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from datetime import UTC, datetime
 import json
 import logging
 from typing import Any, cast
 
-from fastapi import HTTPException, status
+from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict
 from pydantic_ai.usage import UsageLimits
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
@@ -19,7 +21,19 @@ from app.models.run import Run, RunStatus
 from app.models.run_event import RunEvent, RunEventType
 from app.schemas.run_events import RunEventPayload
 from app.schemas.runs import RunExecutionSummary
-from app.services.run_events import record_run_event
+from app.services.notifications import (
+    completion_notification_recorded,
+    send_completion_notification,
+)
+from app.services.run_events import build_run_event
+from app.services.run_execution import (
+    ExecutionLeaseLostError,
+    RunExecutionJournal,
+    RunExecutionLease,
+    acquire_run_execution,
+    finish_run_execution,
+    run_execution_conflict,
+)
 from app.workflows.config_models import AgentWorkflowConfig
 from app.workflows.loader import WorkflowRegistry, WorkflowRuntime
 from app.workflows.tools import (
@@ -57,62 +71,90 @@ class LocalSlmProjectBrief(BaseModel):
     next_actions: list[str]
 
 
+class _RunInputs(BaseModel):
+    """Run inputs captured when execution starts and restored on resume."""
+
+    title: str | None
+    source_text: str
+
+
+@dataclass
+class _ExecutionContext:
+    db: Session
+    run: Run
+    journal: RunExecutionJournal
+    registry: WorkflowRegistry
+    workflow: WorkflowRuntime
+    settings: Settings
+    inputs: _RunInputs | None = None
+
+    def require_inputs(self) -> _RunInputs:
+        if self.inputs is None:
+            raise WorkflowExecutionError("Run execution inputs were not captured.")
+        return self.inputs
+
+
 async def execute_run_workflow(
     db: Session,
     run: Run,
     registry: WorkflowRegistry,
     settings: Settings,
 ) -> Run:
-    """Execute one submitted messy-notes run synchronously."""
-    if run.status not in {
-        RunStatus.SUBMITTED.value,
-        RunStatus.FAILED.value,
-        RunStatus.DRAFT.value,
-    }:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Only draft, submitted, or failed runs can be executed.",
-        )
+    """Execute or resume one run synchronously while holding its lease.
 
+    Draft, submitted, and failed runs start a fresh execution. A processing
+    run whose executor stopped renewing its lease resumes after its last
+    durably completed step. A run with a live executor is rejected with 409.
+    """
+    lease = acquire_run_execution(db, run, settings.workflow_execution_lease_seconds)
     try:
+        return await _execute_owned_run(db, run, registry, settings, lease)
+    finally:
+        lease.stop_heartbeat()
+
+
+async def _execute_owned_run(
+    db: Session,
+    run: Run,
+    registry: WorkflowRegistry,
+    settings: Settings,
+    lease: RunExecutionLease,
+) -> Run:
+    try:
+        journal = RunExecutionJournal(db, run, lease)
         workflow = registry.get_workflow(run.workflow_key)
-        run.status = RunStatus.PROCESSING.value
-        run.failed_at = cast(Any, None)
-        run.failure_message = cast(Any, None)
-        run.failure_internal_reason = cast(Any, None)
-        db.add(run)
-        db.commit()
-        db.refresh(run)
         log_event(
             logger,
-            "run_execution_started",
+            "run_execution_resumed" if lease.resumed else "run_execution_started",
             run_id=run.id,
             workflow_key=workflow.config.key,
+            completed_steps=len(journal.completed_keys),
         )
-        _event(
+        ctx = _ExecutionContext(
+            db=db,
+            run=run,
+            journal=journal,
+            registry=registry,
+            workflow=workflow,
+            settings=settings,
+        )
+        ctx.inputs = _execution_started(ctx)
+
+        await _execute_messy_notes(ctx)
+
+        _run_completed(ctx)
+        _run_post_processors(ctx)
+        _completion_notification(ctx)
+
+        finish_run_execution(
             db,
-            run,
-            RunEventType.RUN_EXECUTION_STARTED,
-            status=run.status,
-            message=f"Started workflow {workflow.config.key}.",
+            lease,
+            {
+                "status": RunStatus.COMPLETED.value,
+                "follow_up_count": func.coalesce(Run.follow_up_count, 0),
+            },
         )
-
-        await _execute_messy_notes(db, run, workflow, registry, settings)
-
-        run.status = RunStatus.COMPLETED.value
-        run.completed_at = datetime.now(UTC)
-        run.follow_up_count = run.follow_up_count or 0
-        db.add(run)
         db.commit()
-        db.refresh(run)
-        _event(
-            db,
-            run,
-            RunEventType.RUN_COMPLETED,
-            status=run.status,
-            message="Workflow completed.",
-        )
-        _run_post_processors(db, run, workflow, registry)
         db.refresh(run)
         log_event(
             logger,
@@ -121,86 +163,131 @@ async def execute_run_workflow(
             workflow_key=workflow.config.key,
         )
         return run
-    except Exception as exc:
-        run.status = RunStatus.FAILED.value
-        run.failed_at = datetime.now(UTC)
-        run.failure_message = "The run failed during bounded workflow execution."
-        run.failure_internal_reason = str(exc)
-        db.add(run)
-        db.commit()
-        db.refresh(run)
-        _event(
-            db,
-            run,
-            RunEventType.RUN_FAILED,
-            status=run.status,
-            message=run.failure_message,
-            tool_result={"internal_reason": str(exc)[:500]},
-        )
+    except ExecutionLeaseLostError as exc:
+        db.rollback()
         log_event(
             logger,
-            "run_execution_failed",
-            level=logging.ERROR,
+            "run_execution_lease_lost",
+            level=logging.WARNING,
             run_id=run.id,
             workflow_key=run.workflow_key,
-            internal_reason=str(exc),
         )
+        raise run_execution_conflict() from exc
+    except Exception as exc:
+        _record_failure(db, run, lease, exc)
         if isinstance(exc, HTTPException):
             raise
         raise WorkflowExecutionError(str(exc)) from exc
 
 
-async def _execute_messy_notes(
-    db: Session,
-    run: Run,
-    workflow: WorkflowRuntime,
-    registry: WorkflowRegistry,
-    settings: Settings,
+def _record_failure(
+    db: Session, run: Run, lease: RunExecutionLease, exc: Exception
 ) -> None:
+    db.rollback()
+    failure_message = "The run failed during bounded workflow execution."
+    try:
+        finish_run_execution(
+            db,
+            lease,
+            {
+                "status": RunStatus.FAILED.value,
+                "failed_at": datetime.now(UTC),
+                "failure_message": failure_message,
+                "failure_internal_reason": str(exc),
+            },
+        )
+        db.add(
+            build_run_event(
+                run.id,
+                RunEventPayload(
+                    event_type=RunEventType.RUN_FAILED,
+                    status=RunStatus.FAILED.value,
+                    message=failure_message,
+                    tool_result={"internal_reason": str(exc)[:500]},
+                ),
+            )
+        )
+        db.commit()
+        db.refresh(run)
+    except ExecutionLeaseLostError as lost:
+        raise run_execution_conflict() from lost
+    except Exception as write_exc:
+        db.rollback()
+        log_event(
+            logger,
+            "run_failure_record_failed",
+            level=logging.ERROR,
+            run_id=run.id,
+            error=str(write_exc),
+        )
+    log_event(
+        logger,
+        "run_execution_failed",
+        level=logging.ERROR,
+        run_id=run.id,
+        workflow_key=run.workflow_key,
+        internal_reason=str(exc),
+    )
+
+
+def _execution_started(ctx: _ExecutionContext) -> _RunInputs:
+    key = ctx.journal.begin("run_execution_started")
+    if ctx.journal.is_completed(key):
+        return _RunInputs.model_validate_json(_stored_output(ctx, key))
+    inputs = _RunInputs(
+        title=ctx.run.title,
+        source_text=ctx.run.normalized_input_text or ctx.run.input_text or "",
+    )
+    _event(
+        ctx,
+        RunEventType.RUN_EXECUTION_STARTED,
+        status=RunStatus.PROCESSING.value,
+        message=f"Started workflow {ctx.workflow.config.key}.",
+    )
+    ctx.journal.complete(key, inputs.model_dump_json())
+    return inputs
+
+
+async def _execute_messy_notes(ctx: _ExecutionContext) -> None:
+    workflow = ctx.workflow
     if workflow.config.key == "messy-notes-local-slm":
-        await _execute_messy_notes_local_slm(db, run, workflow, settings)
+        await _execute_messy_notes_local_slm(ctx)
         return
 
     if workflow.config.key != "messy-notes-v1":
         raise WorkflowExecutionError(f"Unsupported workflow '{workflow.config.key}'.")
 
+    inputs = ctx.require_inputs()
     orchestrator = workflow.config.starting_agent
-    await _agent_started(db, run, workflow, orchestrator, settings)
-    source_text = run.normalized_input_text or run.input_text or ""
+    await _agent_started(ctx, orchestrator)
     normalized = cast(
         Any,
         _tool(
-            db,
-            run,
-            registry,
+            ctx,
             orchestrator,
             "normalize_input",
-            TextToolInput(text=source_text),
+            TextToolInput(text=inputs.source_text),
         ),
     )
-    await _agent_finished(db, run, workflow, orchestrator, settings)
+    await _agent_finished(ctx, orchestrator)
 
-    _handoff(db, run, workflow, orchestrator, "extractor")
-    await _agent_started(db, run, workflow, "extractor", settings)
+    _handoff(ctx, orchestrator, "extractor")
+    await _agent_started(ctx, "extractor")
     sections = cast(
         SectionsOutput,
         _tool(
-            db,
-            run,
-            registry,
+            ctx,
             "extractor",
             "split_into_sections",
             SectionsInput(text=normalized.text),
         ),
     )
     extraction_input = SectionsToolInput(sections=sections.sections)
-    claims, decisions, action_items = _run_extraction_parallel(
-        db, run, workflow, registry, extraction_input
-    )
-    await _agent_finished(db, run, workflow, "extractor", settings)
+    claims, decisions, action_items = _run_extraction_parallel(ctx, extraction_input)
+    await _agent_finished(ctx, "extractor")
 
-    _handoff(db, run, workflow, "extractor", "reconciler")
-    await _agent_started(db, run, workflow, "reconciler", settings)
+    _handoff(ctx, "extractor", "reconciler")
+    await _agent_started(ctx, "reconciler")
     reconciliation_input = ReconciliationInput(
         claims=claims.items,
         decisions=decisions.items,
@@ -208,38 +295,22 @@ async def _execute_messy_notes(
     )
     duplicates = cast(
         DuplicateFindingsOutput,
-        _tool(
-            db,
-            run,
-            registry,
-            "reconciler",
-            "find_duplicates",
-            reconciliation_input,
-        ),
+        _tool(ctx, "reconciler", "find_duplicates", reconciliation_input),
     )
     contradictions = cast(
         ContradictionFindingsOutput,
-        _tool(
-            db,
-            run,
-            registry,
-            "reconciler",
-            "find_contradictions",
-            reconciliation_input,
-        ),
+        _tool(ctx, "reconciler", "find_contradictions", reconciliation_input),
     )
-    await _agent_finished(db, run, workflow, "reconciler", settings)
+    await _agent_finished(ctx, "reconciler")
 
-    _handoff(db, run, workflow, "reconciler", "brief_writer")
-    await _agent_started(db, run, workflow, "brief_writer", settings)
+    _handoff(ctx, "reconciler", "brief_writer")
+    await _agent_started(ctx, "brief_writer")
     brief = _tool(
-        db,
-        run,
-        registry,
+        ctx,
         "brief_writer",
         "format_brief",
         BriefInput(
-            title=run.title,
+            title=inputs.title,
             claims=claims.items,
             decisions=decisions.items,
             action_items=action_items.items,
@@ -247,77 +318,85 @@ async def _execute_messy_notes(
             contradictions=contradictions.contradictions,
         ),
     )
-    run.output_brief_serialized = brief.model_dump_json()
-    db.add(run)
-    db.commit()
-    db.refresh(run)
-    await _agent_finished(db, run, workflow, "brief_writer", settings)
+    _persist_output_brief(ctx, brief)
+    await _agent_finished(ctx, "brief_writer")
 
 
-async def _execute_messy_notes_local_slm(
-    db: Session,
-    run: Run,
-    workflow: WorkflowRuntime,
-    settings: Settings,
-) -> None:
+async def _execute_messy_notes_local_slm(ctx: _ExecutionContext) -> None:
     """Execute the local Ollama-backed single-model messy notes workflow."""
+    workflow = ctx.workflow
     role = workflow.config.starting_agent
-    await _agent_started(db, run, workflow, role, settings, touch_agent=False)
+    await _agent_started(ctx, role, touch_agent=False)
     runtime = workflow.agents[role]
     if runtime.agent is None:
         raise WorkflowExecutionError(f"Workflow agent '{role}' is not executable.")
 
-    source_text = run.normalized_input_text or run.input_text or ""
+    source_text = ctx.require_inputs().source_text
     if not source_text.strip():
         raise WorkflowExecutionError("Cannot execute local SLM workflow without input.")
 
-    prompt = (
-        "Messy notes:\n"
-        f"{source_text.strip()}\n\n"
-        "Return only the strict JSON project brief."
-    )
-    result = await runtime.agent.run(
-        prompt,
-        deps=WorkflowAgentDeps(run=run, db=db),
-        usage_limits=UsageLimits(request_limit=1, tool_calls_limit=0),
-    )
-    project_brief = _parse_local_slm_project_brief(str(result.output))
+    key = ctx.journal.begin(f"model:{role}")
+    if ctx.journal.is_completed(key):
+        raw_output = _stored_output(ctx, key)
+    else:
+        prompt = (
+            "Messy notes:\n"
+            f"{source_text.strip()}\n\n"
+            "Return only the strict JSON project brief."
+        )
+        result = await runtime.agent.run(
+            prompt,
+            deps=WorkflowAgentDeps(run=ctx.run, db=ctx.db),
+            usage_limits=UsageLimits(request_limit=1, tool_calls_limit=0),
+        )
+        raw_output = str(result.output)
+        ctx.journal.complete(key, raw_output)
+    project_brief = _parse_local_slm_project_brief(raw_output)
     brief = _local_project_brief_to_run_brief(project_brief)
-    run.output_brief_serialized = brief.model_dump_json()
-    db.add(run)
-    db.commit()
-    db.refresh(run)
-    await _agent_finished(db, run, workflow, role, settings)
+    _persist_output_brief(ctx, brief)
+    await _agent_finished(ctx, role)
+
+
+def _persist_output_brief(ctx: _ExecutionContext, brief: BaseModel) -> None:
+    key = ctx.journal.begin("persist_output_brief")
+    if ctx.journal.is_completed(key):
+        return
+    ctx.run.output_brief_serialized = brief.model_dump_json()
+    ctx.journal.complete(key)
 
 
 def _run_extraction_parallel(
-    db: Session,
-    run: Run,
-    workflow: WorkflowRuntime,
-    registry: WorkflowRegistry,
+    ctx: _ExecutionContext,
     payload: SectionsToolInput,
 ) -> tuple[ExtractedItemsOutput, ExtractedItemsOutput, ExtractedItemsOutput]:
-    extractor = _agent_config(workflow, "extractor")
+    registry = ctx.registry
+    run = ctx.run
+    extractor = _agent_config(ctx.workflow, "extractor")
     tool_names = ["extract_claims", "extract_decisions", "extract_action_items"]
     if extractor.parallel is None or not extractor.parallel.enabled:
         claims = cast(
             ExtractedItemsOutput,
-            _tool(db, run, registry, "extractor", "extract_claims", payload),
+            _tool(ctx, "extractor", "extract_claims", payload),
         )
         decisions = cast(
             ExtractedItemsOutput,
-            _tool(db, run, registry, "extractor", "extract_decisions", payload),
+            _tool(ctx, "extractor", "extract_decisions", payload),
         )
         action_items = cast(
             ExtractedItemsOutput,
-            _tool(db, run, registry, "extractor", "extract_action_items", payload),
+            _tool(ctx, "extractor", "extract_action_items", payload),
         )
         return claims, decisions, action_items
 
+    key = ctx.journal.begin(f"parallel:extractor:{extractor.parallel.group}")
+    if ctx.journal.is_completed(key):
+        stored = json.loads(_stored_output(ctx, key))
+        restored = [ExtractedItemsOutput.model_validate(stored[n]) for n in tool_names]
+        return restored[0], restored[1], restored[2]
+
     for name in tool_names:
         _event(
-            db,
-            run,
+            ctx,
             RunEventType.TOOL_CALLED,
             agent_role="extractor",
             tool_name=name,
@@ -346,8 +425,7 @@ def _run_extraction_parallel(
             raise
     for name, result in zip(tool_names, results, strict=True):
         _event(
-            db,
-            run,
+            ctx,
             RunEventType.TOOL_RESULT,
             agent_role="extractor",
             tool_name=name,
@@ -358,47 +436,52 @@ def _run_extraction_parallel(
             status=RunStatus.PROCESSING.value,
             message="Completed bounded extraction tool.",
         )
+    ctx.journal.complete(
+        key,
+        json.dumps(
+            {
+                name: result.model_dump(mode="json")
+                for name, result in zip(tool_names, results, strict=True)
+            }
+        ),
+    )
     return results[0], results[1], results[2]
 
 
 async def _agent_started(
-    db: Session,
-    run: Run,
-    workflow: WorkflowRuntime,
+    ctx: _ExecutionContext,
     role: str,
-    settings: Settings,
     *,
     touch_agent: bool = True,
 ) -> None:
-    _agent_config(workflow, role)
+    _agent_config(ctx.workflow, role)
+    key = ctx.journal.begin(f"agent_started:{role}")
+    if ctx.journal.is_completed(key):
+        return
     _event(
-        db,
-        run,
+        ctx,
         RunEventType.AGENT_STARTED,
         agent_role=role,
         status=RunStatus.PROCESSING.value,
         message=f"Agent {role} started.",
     )
     if touch_agent:
-        await _touch_pydantic_agent(workflow, run, role, settings)
+        await _touch_pydantic_agent(ctx.workflow, ctx.run, role, ctx.settings)
+    ctx.journal.complete(key)
 
 
-async def _agent_finished(
-    db: Session,
-    run: Run,
-    workflow: WorkflowRuntime,
-    role: str,
-    settings: Settings,
-) -> None:
-    del workflow, settings
+async def _agent_finished(ctx: _ExecutionContext, role: str) -> None:
+    key = ctx.journal.begin(f"agent_finished:{role}")
+    if ctx.journal.is_completed(key):
+        return
     _event(
-        db,
-        run,
+        ctx,
         RunEventType.AGENT_FINISHED,
         agent_role=role,
         status=RunStatus.PROCESSING.value,
         message=f"Agent {role} finished.",
     )
+    ctx.journal.complete(key)
 
 
 async def _touch_pydantic_agent(
@@ -423,16 +506,17 @@ async def _touch_pydantic_agent(
 
 
 def _tool(
-    db: Session,
-    run: Run,
-    registry: WorkflowRegistry,
+    ctx: _ExecutionContext,
     agent_role: str,
     tool_name: str,
     payload: BaseModel,
 ) -> BaseModel:
+    key = ctx.journal.begin(f"tool:{agent_role}:{tool_name}")
+    if ctx.journal.is_completed(key):
+        output_model = ctx.registry.tool_registry.get(tool_name).output_model
+        return output_model.model_validate_json(_stored_output(ctx, key))
     _event(
-        db,
-        run,
+        ctx,
         RunEventType.TOOL_CALLED,
         agent_role=agent_role,
         tool_name=tool_name,
@@ -440,65 +524,81 @@ def _tool(
         status=RunStatus.PROCESSING.value,
     )
     try:
-        result = registry.tool_registry.execute(tool_name, payload)
+        result = ctx.registry.tool_registry.execute(tool_name, payload)
     except Exception:
         log_event(
             logger,
             "tool_execution_failed",
             level=logging.ERROR,
-            run_id=run.id,
+            run_id=ctx.run.id,
             agent_role=agent_role,
             tool_name=tool_name,
         )
         raise
     _event(
-        db,
-        run,
+        ctx,
         RunEventType.TOOL_RESULT,
         agent_role=agent_role,
         tool_name=tool_name,
         tool_result=_summarize_payload(result),
         status=RunStatus.PROCESSING.value,
     )
+    ctx.journal.complete(key, result.model_dump_json())
     return result
 
 
 def _handoff(
-    db: Session,
-    run: Run,
-    workflow: WorkflowRuntime,
+    ctx: _ExecutionContext,
     source_role: str,
     target_role: str,
 ) -> None:
-    source = _agent_config(workflow, source_role)
-    _agent_config(workflow, target_role)
+    source = _agent_config(ctx.workflow, source_role)
+    _agent_config(ctx.workflow, target_role)
     if target_role not in source.can_handoff_to:
         raise WorkflowExecutionError(
             f"Agent '{source_role}' cannot hand off to '{target_role}'."
         )
+    key = ctx.journal.begin(f"handoff:{source_role}:{target_role}")
+    if ctx.journal.is_completed(key):
+        return
     _event(
-        db,
-        run,
+        ctx,
         RunEventType.HANDOFF_OCCURRED,
         handoff_source_role=source_role,
         handoff_target_role=target_role,
         status=RunStatus.PROCESSING.value,
         message=f"{source_role} handed off to {target_role}.",
     )
+    ctx.journal.complete(key)
 
 
-def _run_post_processors(
-    db: Session,
-    run: Run,
-    workflow: WorkflowRuntime,
-    registry: WorkflowRegistry,
-) -> None:
+def _run_completed(ctx: _ExecutionContext) -> None:
+    key = ctx.journal.begin("run_completed")
+    if ctx.journal.is_completed(key):
+        return
+    ctx.run.completed_at = datetime.now(UTC)
+    _event(
+        ctx,
+        RunEventType.RUN_COMPLETED,
+        status=RunStatus.COMPLETED.value,
+        message="Workflow completed.",
+    )
+    ctx.journal.complete(key)
+
+
+def _run_post_processors(ctx: _ExecutionContext) -> None:
+    db = ctx.db
+    run = ctx.run
+    workflow = ctx.workflow
     results: dict[str, dict[str, Any]] = {}
     for key in workflow.config.post_processors:
-        processor = registry.post_processors[key]
+        step_key = ctx.journal.begin(f"post_processor:{key}")
+        if ctx.journal.is_completed(step_key):
+            results[key] = json.loads(_stored_output(ctx, step_key))
+            continue
+        processor = ctx.registry.post_processors[key]
         _event(
-            db,
-            run,
+            ctx,
             RunEventType.POST_PROCESSOR_STARTED,
             post_processor_key=key,
             status=RunStatus.COMPLETED.value,
@@ -525,18 +625,31 @@ def _run_post_processors(
             "summary": audit["summary"],
         }
         run.post_processor_results_serialized = json.dumps(results)
-        db.add(run)
-        db.commit()
-        db.refresh(run)
         _event(
-            db,
-            run,
+            ctx,
             RunEventType.POST_PROCESSOR_COMPLETED,
             post_processor_key=key,
             status=RunStatus.COMPLETED.value,
             tool_result={"overall_assessment": audit["overall_assessment"]},
             message=f"Post-processor {key} completed.",
         )
+        ctx.journal.complete(step_key, json.dumps(results[key]))
+
+
+def _completion_notification(ctx: _ExecutionContext) -> None:
+    key = ctx.journal.begin("completion_notification")
+    if ctx.journal.is_completed(key):
+        return
+    if not completion_notification_recorded(ctx.db, ctx.run):
+        send_completion_notification(ctx.db, ctx.run, ctx.settings)
+    ctx.journal.complete(key)
+
+
+def _stored_output(ctx: _ExecutionContext, key: str) -> str:
+    output = ctx.journal.output(key)
+    if output is None:
+        raise WorkflowExecutionError(f"Checkpoint '{key}' has no stored output.")
+    return output
 
 
 def _audit_tool_usage_and_handoffs(
@@ -642,8 +755,7 @@ def _bullet_list(items: list[str]) -> str:
 
 
 def _event(
-    db: Session,
-    run: Run,
+    ctx: _ExecutionContext,
     event_type: RunEventType,
     *,
     status: str | None = None,
@@ -656,9 +768,7 @@ def _event(
     post_processor_key: str | None = None,
     message: str | None = None,
 ) -> None:
-    record_run_event(
-        db,
-        run,
+    ctx.journal.emit(
         RunEventPayload(
             event_type=event_type,
             status=status,
@@ -670,7 +780,7 @@ def _event(
             handoff_target_role=handoff_target_role,
             post_processor_key=post_processor_key,
             message=message,
-        ),
+        )
     )
 
 

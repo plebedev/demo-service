@@ -57,6 +57,9 @@ class Settings(BaseSettings):
         default="app/resources/post_processors/post-processors.yaml",
         alias="POST_PROCESSOR_CONFIG_PATH",
     )
+    workflow_execution_lease_seconds: float = Field(
+        default=60, gt=0, alias="WORKFLOW_EXECUTION_LEASE_SECONDS"
+    )
     context_engine_model_config_path: str = Field(
         default="app/resources/context_engine/model-flows.yaml",
         alias="CONTEXT_ENGINE_MODEL_CONFIG_PATH",

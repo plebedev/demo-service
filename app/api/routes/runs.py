@@ -32,7 +32,6 @@ from app.services.follow_up import answer_follow_up
 from app.services.notifications import (
     capture_notification_preference,
     get_sms_phone_status,
-    maybe_send_completion_notification,
 )
 from app.services.run_events import serialize_run_event
 from app.services.runs import (
@@ -198,7 +197,6 @@ async def submit_run_route(
         request.app.state.workflow_registry,
         get_settings(),
     )
-    maybe_send_completion_notification(db, executed, get_settings())
     return serialize_run(executed, db)
 
 
@@ -209,7 +207,7 @@ async def execute_run_route(
     claims: AccessTokenClaims = Depends(messy_notes_access),
     db: Session = Depends(get_db_session),
 ) -> RunResponse:
-    """Execute an existing draft/submitted/failed run."""
+    """Execute a draft/submitted/failed run or resume an abandoned one."""
     run = get_run_or_404(db, run_id, invitation_code_id=claims.invitation_code_id)
     executed = await execute_run_workflow(
         db,
@@ -217,7 +215,6 @@ async def execute_run_route(
         request.app.state.workflow_registry,
         get_settings(),
     )
-    maybe_send_completion_notification(db, executed, get_settings())
     return serialize_run(executed, db)
 
 

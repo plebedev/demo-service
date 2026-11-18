@@ -30,6 +30,9 @@ routing.
   tool access, bounded handoffs, parallel metadata, and post-processor references
 - bounded runtime execution for `messy-notes-v1`, with structured
   `run_events`, final brief storage, and post-processor audit results
+- lease-based execution ownership with durable step checkpoints, so an
+  interrupted run resumes from its last completed step and concurrent
+  executions of one run are rejected with `409`
 - domain-neutral Context Engine infrastructure with domain-pack registration,
   generic artifact ingestion, extraction orchestration, provenance/source links,
   perspective views, actionable-item generation, repository interfaces, and
@@ -352,6 +355,7 @@ Important variables:
 | `DEFAULT_WORKFLOW_KEY` | Workflow key assigned to newly created runs |
 | `WORKFLOW_CONFIG_DIR` | Directory containing workflow YAML definitions |
 | `POST_PROCESSOR_CONFIG_PATH` | YAML file defining workflow post-processors |
+| `WORKFLOW_EXECUTION_LEASE_SECONDS` | Run execution lease duration; a run whose executor stops renewing its lease for this long can be resumed; default `60` |
 | `CONTEXT_ENGINE_MODEL_CONFIG_PATH` | YAML file defining generic Context Engine model profiles and domain/flow/step selection |
 | `CONTEXT_ENGINE_EXECUTION_MODE` | Context Engine model mode: `deterministic`, `llm`, or `hybrid`; default `hybrid` |
 | `MAX_FILES_PER_RUN` | Limit for files per run |
@@ -550,7 +554,8 @@ Submitting a run now executes the configured messy-notes workflow
 synchronously:
 
 - `/api/runs/<run_id>/submit` saves the submitted state and runs the workflow
-- `/api/runs/<run_id>/execute` can execute an existing draft/submitted/failed run
+- `/api/runs/<run_id>/execute` can execute an existing draft/submitted/failed run,
+  or resume a `processing` run whose executor was abandoned
 - `/api/runs/<run_id>/events` returns structured execution events
 
 The hosted runtime path is intentionally bounded: orchestrator, extractor,
@@ -559,6 +564,63 @@ Extractor tools run in the one explicit parallel group defined in YAML.
 
 The first post-processor is `audit-tool-usage-and-handoffs`; it reads persisted
 run events and stores a structured audit under `post_processor_results_json`.
+
+The completion SMS (when the run opted in) is sent by the executor as the last
+workflow step, before the run is marked `completed`.
+
+### Execution ownership and recovery
+
+Only one executor may own a run at a time, across threads and across separate
+application processes or pods. Ownership is a lease stored on the `runs` row
+(`execution_owner_token`, `execution_lease_expires_at`):
+
+- Starting or resuming execution takes the lease with a conditional `UPDATE`
+  (compare-and-set on status and lease expiry). No advisory locks or native
+  JSON columns are used, so the same code runs on PostgreSQL and Oracle.
+- While the executor is alive, a background heartbeat thread renews the lease
+  every `WORKFLOW_EXECUTION_LEASE_SECONDS / 3`, independently of the workflow
+  step in progress. A single tool, model, post-processor, or notification call
+  may therefore take longer than the lease without losing ownership.
+- A run is abandoned only after its executor stops renewing the lease (process
+  crash, pod kill, lost database connectivity) and the lease expires.
+- Lease timestamps use the application clock in UTC; keep hosts NTP-synced and
+  keep the lease comfortably above expected clock skew (Oracle `DATE` columns
+  store whole seconds).
+
+Request behavior:
+
+| Run state | `/execute` | `/submit` |
+|---|---|---|
+| `draft`, `failed` | starts a fresh execution | submits and executes |
+| `submitted` | starts a fresh execution | `409`, unchanged |
+| `processing`, lease active | `409` `This run is already being executed.` | `409`, unchanged |
+| `processing`, lease expired | resumes from the last completed step | `409`, unchanged |
+| `completed` | `409`, unchanged | `409`, unchanged |
+
+Every workflow step (execution start, agent start/finish including model
+calls, tool calls, the parallel extraction group, handoffs, local model calls, brief
+persistence, `run_completed`, each post-processor, and the completion
+notification) is checkpointed in `run_execution_steps`. A step's run events,
+any run-column updates, and its checkpoint (with the serialized output that
+later steps need) are committed in one transaction that is fenced by the owner
+token, so an executor that lost its lease cannot write. The run inputs (title
+and normalized notes) are captured in the first checkpoint and reused on
+resume. A resumed executor replays checkpoints instead of repeating completed
+work, so `/events` stays in logical order with no duplicated successful steps.
+The completion SMS is recorded as `attempted` before the provider is
+contacted; if an executor dies mid-send, recovery does not send it again.
+
+A step interrupted before its checkpoint committed did not complete and is run
+again on resume (for example, a model call whose result was never persisted).
+Fresh executions of draft, submitted, or failed runs discard old checkpoints.
+Normal execution errors still mark the run `failed` with the existing
+`failure_message`, `failure_internal_reason`, and `run_failed` event, and
+release the lease.
+
+Interruption and concurrency coverage lives in
+`tests/test_run_execution_recovery.py`; it crashes executors at every step of
+each first-party workflow, kills a separate worker process
+(`tests/run_execution_worker.py`) mid-step, and races concurrent processes.
 
 Run execution tests are included in the normal backend workflow:
 

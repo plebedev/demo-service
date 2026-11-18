@@ -99,3 +99,9 @@ class Run(Base):
     notification_preference_serialized: Mapped[str] = mapped_column(
         "notification_preference_json", Text(), nullable=True
     )  # serialized NotificationPreference
+    execution_owner_token: Mapped[str] = mapped_column(
+        String(64), nullable=True
+    )  # opaque token of the executor currently holding the execution lease
+    execution_lease_expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )  # when the current execution lease lapses unless renewed

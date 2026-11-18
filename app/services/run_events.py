@@ -18,8 +18,17 @@ def record_run_event(
     payload: RunEventPayload,
 ) -> RunEvent:
     """Persist a structured run event for future audit and post-processing."""
-    event = RunEvent(
-        run_id=run.id,
+    event = build_run_event(run.id, payload)
+    db.add(event)
+    db.commit()
+    db.refresh(event)
+    return event
+
+
+def build_run_event(run_id: int, payload: RunEventPayload) -> RunEvent:
+    """Build an unsaved run event so callers can commit it with other state."""
+    return RunEvent(
+        run_id=run_id,
         event_type=payload.event_type.value,
         status=payload.status,
         agent_role=payload.agent_role,
@@ -31,10 +40,6 @@ def record_run_event(
         post_processor_key=payload.post_processor_key,
         message=payload.message,
     )
-    db.add(event)
-    db.commit()
-    db.refresh(event)
-    return event
 
 
 def serialize_run_event(event: RunEvent) -> RunEventResponse:

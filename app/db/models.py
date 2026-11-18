@@ -29,6 +29,7 @@ from app.models.rag import (
 )
 from app.models.run import Run
 from app.models.run_event import RunEvent
+from app.models.run_execution_step import RunExecutionStep
 from app.models.sms import SmsConversation, SmsMessage, SmsOptOut
 from app.models.voice import (
     VoiceConversationRecord,
@@ -60,6 +61,7 @@ __all__ = [
     "RagPersonaDocument",
     "Run",
     "RunEvent",
+    "RunExecutionStep",
     "SmsConversation",
     "SmsMessage",
     "SmsOptOut",
